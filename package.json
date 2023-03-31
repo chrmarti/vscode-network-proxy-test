@@ -2,7 +2,12 @@
 	"name": "network-proxy-test",
 	"displayName": "Network Proxy Test",
 	"license": "MIT",
+	"publisher": "chrmarti",
 	"version": "0.0.1",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/chrmarti/vscode-network-proxy-test.git"
+	},
 	"engines": {
 		"vscode": "^1.77.0"
 	},
@@ -10,10 +15,13 @@
 		"Other"
 	],
 	"main": "./out/extension.js",
+	"activationEvents": [
+	],
 	"contributes": {
 		"commands": [
 			{
 				"command": "network-proxy-test.test-connection",
+				"category": "Network Proxy Test",
 				"title": "Test Network Connection"
 			}
 		]

@@ -9,8 +9,7 @@ import * as https from 'https';
 
 export function activate(context: vscode.ExtensionContext) {
 
-	let expectedUrl: string;
-	let actualResponse: string;
+	let handler: ((url: string, response: string) => Promise<void>) | undefined;
 
 	const agent = requireFromApp('vscode-proxy-agent/out/agent');
 	const origCallback = agent.PacProxyAgent.prototype.callback;
@@ -21,8 +20,8 @@ export function activate(context: vscode.ExtensionContext) {
 			this.resolver = async (...args: any[]) => {
 				const url = args[2];
 				const res = await origResolver.apply(this, args);
-				if (url === expectedUrl || url === expectedUrl + '/') {
-					actualResponse = res;
+				if (handler) {
+					await handler(url, res);
 				}
 				return res;
 			};
@@ -42,11 +41,16 @@ export function activate(context: vscode.ExtensionContext) {
 		const document = await vscode.workspace.openTextDocument({ language: 'text' });
 		const editor = await vscode.window.showTextDocument(document);
 		await appendText(editor, `Note: Make sure to replace all sensitive information with dummy values before sharing this output.\n`);
-		expectedUrl = url;
-		await probeUrl(editor, url);
 		await logSettings(editor);
 		await logEnvVariables(editor);
-		await appendText(editor, `vscode-proxy-agent: ${actualResponse}`);
+		handler = async (requestedUrl, response) => {
+			if (requestedUrl === url || requestedUrl === url + '/') {
+				handler = undefined;
+				await appendText(editor, `vscode-proxy-agent: ${response}`);
+			}
+		};
+		await probeUrl(editor, url);
+		handler = undefined;
 	}));
 }
 
@@ -77,6 +81,7 @@ async function logSettings(editor: vscode.TextEditor) {
 			}
 		}
 	}
+	await appendText(editor, '');
 }
 
 async function logEnvVariables(editor: vscode.TextEditor) {
@@ -87,6 +92,7 @@ async function logEnvVariables(editor: vscode.TextEditor) {
 			await appendText(editor, `${env}=${process.env[env]}`);
 		}
 	}
+	await appendText(editor, '');
 }
 
 async function appendText(editor: vscode.TextEditor, string: string) {
