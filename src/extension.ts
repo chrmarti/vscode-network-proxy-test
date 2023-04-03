@@ -6,10 +6,11 @@
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
+import * as tls from 'tls';
+
+let proxyLookupResponse: ((url: string, response: string) => Promise<void>) | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
-
-	let handler: ((url: string, response: string) => Promise<void>) | undefined;
 
 	const agent = requireFromApp('vscode-proxy-agent/out/agent');
 	const origCallback = agent.PacProxyAgent.prototype.callback;
@@ -20,8 +21,8 @@ export function activate(context: vscode.ExtensionContext) {
 			this.resolver = async (...args: any[]) => {
 				const url = args[2];
 				const res = await origResolver.apply(this, args);
-				if (handler) {
-					await handler(url, res);
+				if (proxyLookupResponse) {
+					await proxyLookupResponse(url, res);
 				}
 				return res;
 			};
@@ -29,39 +30,64 @@ export function activate(context: vscode.ExtensionContext) {
 		return origCallback.apply(this, args);
 	};
 
-	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection', async () => {
-		const url = await vscode.window.showInputBox({
-			prompt: 'Enter URL to probe',
-			value: 'https://example.com',
-		});
-		if (!url) {
-			return;
-		}
-
-		const document = await vscode.workspace.openTextDocument({ language: 'text' });
-		const editor = await vscode.window.showTextDocument(document);
-		await appendText(editor, `Note: Make sure to replace all sensitive information with dummy values before sharing this output.\n`);
-		await logSettings(editor);
-		await logEnvVariables(editor);
-		handler = async (requestedUrl, response) => {
-			if (requestedUrl === url || requestedUrl === url + '/') {
-				handler = undefined;
-				await appendText(editor, `vscode-proxy-agent: ${response}`);
-			}
-		};
-		await probeUrl(editor, url);
-		handler = undefined;
-	}));
+	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection', () => testConnection(true)));
+	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection-allow-unauthorized', () => testConnection(false)));
 }
 
-async function probeUrl(editor: vscode.TextEditor, url: string) {
-	await appendText(editor, `Sending GET request to ${url}...`);
+async function testConnection(rejectUnauthorized: boolean) {
+	const url = await vscode.window.showInputBox({
+		prompt: 'Enter URL to probe',
+		value: 'https://example.com',
+		ignoreFocusOut: true,
+	});
+	if (!url) {
+		return;
+	}
+
+	const document = await vscode.workspace.openTextDocument({ language: 'text' });
+	const editor = await vscode.window.showTextDocument(document);
+	await appendText(editor, `Note: Make sure to replace all sensitive information with dummy values before sharing this output.\n`);
+	await logSettings(editor);
+	await logEnvVariables(editor);
+	proxyLookupResponse = async (requestedUrl, response) => {
+		if (requestedUrl === url || requestedUrl === url + '/') {
+			proxyLookupResponse = undefined;
+			await appendText(editor, `vscode-proxy-agent: ${response}`);
+		}
+	};
+	await probeUrl(editor, url, rejectUnauthorized);
+	proxyLookupResponse = undefined;
+}
+
+async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean) {
+	await appendText(editor, `Sending GET request to ${url}${rejectUnauthorized ? '' : ' (allowing unauthorized)'}...`);
 	try {
 		const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
-			const req = https.get(url, resolve);
+			const req = https.get(url, { rejectUnauthorized }, resolve);
 			req.on('error', reject);
 		});
+		const cert = res.socket instanceof tls.TLSSocket ? (res.socket as tls.TLSSocket).getPeerCertificate(true) : undefined;
 		await appendText(editor, 'Received response code: ' + res.statusCode);
+		if (cert) {
+			await appendText(editor, `Certificate chain:`);
+			let current = cert;
+			const seen = new Set<string>();
+			while (current && !seen.has(current.fingerprint)) {
+				await appendText(editor, `- Subject: ${current.subject.CN}${current.subject.O ? ` (${current.subject.O})` : ''}`);
+				if (current.subjectaltname) {
+					await appendText(editor, `  Subject alt: ${current.subjectaltname}`);
+				}
+				await appendText(editor, `  Validity: ${current.valid_from} - ${current.valid_to}`);
+				await appendText(editor, `  Fingerprint: ${current.fingerprint}`);
+				if (!current.issuerCertificate) {
+					await appendText(editor, `  Issuer certificate not found: ${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}`);
+				} else if (current.issuerCertificate.fingerprint === current.fingerprint) {
+					await appendText(editor, `  Self-signed`);
+				}
+				seen.add(current.fingerprint);
+				current = current.issuerCertificate;
+			}
+		}
 	} catch (err) {
 		await appendText(editor, 'Received error: ' + (err as any)?.message);
 	}
