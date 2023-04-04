@@ -9,6 +9,9 @@ import * as https from 'https';
 import * as tls from 'tls';
 import * as os from 'os';
 import * as path from 'path';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as cp from 'child_process';
 
 let proxyLookupResponse: ((url: string, response: string) => Promise<void>) | undefined;
 
@@ -34,6 +37,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection', () => testConnection(true)));
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection-allow-unauthorized', () => testConnection(false)));
+	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.show-os-certificates', () => showOSCertificates()));
+	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.show-builtin-certificates', () => showBuiltInCertificates()));
 }
 
 async function testConnection(rejectUnauthorized: boolean) {
@@ -46,10 +51,8 @@ async function testConnection(rejectUnauthorized: boolean) {
 		return;
 	}
 
-	const document = await vscode.workspace.openTextDocument({ language: 'text' });
-	const editor = await vscode.window.showTextDocument(document);
-	await appendText(editor, `Note: Make sure to replace all sensitive information with dummy values before sharing this output.\n`);
-	await logRuntimeInfo(editor);
+	const editor = await openEmptyEditor();
+	await logHeaderInfo(editor);
 	await logSettings(editor);
 	await logEnvVariables(editor);
 	proxyLookupResponse = async (requestedUrl, response) => {
@@ -60,6 +63,49 @@ async function testConnection(rejectUnauthorized: boolean) {
 	};
 	await probeUrl(editor, url, rejectUnauthorized);
 	proxyLookupResponse = undefined;
+}
+
+async function showOSCertificates() {
+	const editor = await openEmptyEditor();
+	await logHeaderInfo(editor);
+	const certs = await readCaCertificates();
+	await logCertificates(editor, 'Certificates loaded from the OS:', certs!.certs);
+}
+
+async function showBuiltInCertificates() {
+	const editor = await openEmptyEditor();
+	await logHeaderInfo(editor);
+	await logCertificates(editor, 'Certificates built-in with Node.js:', tls.rootCertificates);
+}
+
+async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string>) {
+	await appendText(editor, title);
+	for (const cert of certs) {
+		const current = new crypto.X509Certificate(cert);
+		await appendText(editor, `- Subject: ${current.subject.split('\n').join(' ')}`);
+		if (current.subjectAltName) {
+			await appendText(editor, `  Subject alt: ${current.subjectAltName}`);
+		}
+		await appendText(editor, `  Validity: ${current.validFrom} - ${current.validTo}`);
+		await appendText(editor, `  Fingerprint: ${current.fingerprint}`);
+		await appendText(editor, `  Issuer: ${current.issuer.split('\n').join(' ')}`);
+		if (current.keyUsage) {
+			await appendText(editor, `  Key usage: ${current.keyUsage.join(', ')}`);
+		}
+		if (!current.ca) {
+			await appendText(editor, `  Not a CA`);
+		}
+	}
+}
+
+async function openEmptyEditor() {
+	const document = await vscode.workspace.openTextDocument({ language: 'text' });
+	return await vscode.window.showTextDocument(document);
+}
+
+async function logHeaderInfo(editor: vscode.TextEditor) {
+	await appendText(editor, `Note: Make sure to replace all sensitive information with dummy values before sharing this output.\n`);
+	await logRuntimeInfo(editor);
 }
 
 async function logRuntimeInfo(editor: vscode.TextEditor) {
@@ -153,4 +199,98 @@ function requireFromApp(moduleName: string) {
 		// Not available.
 	}
 	throw new Error(`Could not load ${moduleName} from ${appRoot}`);
+}
+
+// From https://github.com/microsoft/vscode-proxy-agent/blob/4410a426f444c1203142c0b72dd09f63650ba1a4/src/index.ts#L401:
+
+async function readCaCertificates() {
+	if (process.platform === 'win32') {
+		return readWindowsCaCertificates();
+	}
+	if (process.platform === 'darwin') {
+		return readMacCaCertificates();
+	}
+	if (process.platform === 'linux') {
+		return readLinuxCaCertificates();
+	}
+	return undefined;
+}
+
+async function readWindowsCaCertificates() {
+	// @ts-ignore Windows only
+	const winCA = (() => {
+		try {
+			return requireFromApp('vscode-windows-ca-certs');
+		} catch {
+			return requireFromApp('@vscode/windows-ca-certs');
+		}
+	})();
+
+	let ders: any[] = [];
+	const store = new winCA.Crypt32();
+	try {
+		let der: any;
+		while (der = store.next()) {
+			ders.push(der);
+		}
+	} finally {
+		store.done();
+	}
+
+	const certs = new Set(ders.map(derToPem));
+	return {
+		certs: Array.from(certs),
+		append: true
+	};
+}
+
+async function readMacCaCertificates() {
+	const stdout = await new Promise<string>((resolve, reject) => {
+		const child = cp.spawn('/usr/bin/security', ['find-certificate', '-a', '-p']);
+		const stdout: string[] = [];
+		child.stdout.setEncoding('utf8');
+		child.stdout.on('data', str => stdout.push(str));
+		child.on('error', reject);
+		child.on('exit', code => code ? reject(code) : resolve(stdout.join('')));
+	});
+	const certs = new Set(stdout.split(/(?=-----BEGIN CERTIFICATE-----)/g)
+		.filter(pem => !!pem.length));
+	return {
+		certs: Array.from(certs),
+		append: true
+	};
+}
+
+const linuxCaCertificatePaths = [
+	'/etc/ssl/certs/ca-certificates.crt',
+	'/etc/ssl/certs/ca-bundle.crt',
+];
+
+async function readLinuxCaCertificates() {
+	for (const certPath of linuxCaCertificatePaths) {
+		try {
+			const content = await fs.promises.readFile(certPath, { encoding: 'utf8' });
+			const certs = new Set(content.split(/(?=-----BEGIN CERTIFICATE-----)/g)
+				.filter(pem => !!pem.length));
+			return {
+				certs: Array.from(certs),
+				append: false
+			};
+		} catch (err: any) {
+			if (err?.code !== 'ENOENT') {
+				throw err;
+			}
+		}
+	}
+	return undefined;
+}
+
+function derToPem(blob: Buffer) {
+	const lines = ['-----BEGIN CERTIFICATE-----'];
+	const der = blob.toString('base64');
+	for (let i = 0; i < der.length; i += 64) {
+		lines.push(der.substr(i, 64));
+	}
+	lines.push('-----END CERTIFICATE-----', '');
+	return lines.join(os.EOL);
 }

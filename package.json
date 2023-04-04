@@ -28,6 +28,16 @@
 				"command": "network-proxy-test.test-connection-allow-unauthorized",
 				"category": "Network Proxy Test",
 				"title": "Test Network Connection (Allow Unauthorized)"
+			},
+			{
+				"command": "network-proxy-test.show-os-certificates",
+				"category": "Network Proxy Test",
+				"title": "Show OS Certificates"
+			},
+			{
+				"command": "network-proxy-test.show-builtin-certificates",
+				"category": "Network Proxy Test",
+				"title": "Show Built-In Certificates"
 			}
 		]
 	},
