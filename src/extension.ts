@@ -75,7 +75,20 @@ async function showOSCertificates() {
 	const editor = await openEmptyEditor();
 	await logHeaderInfo(editor);
 	const certs = await readCaCertificates();
-	await logCertificates(editor, 'Certificates loaded from the OS:', certs!.certs);
+	await logCertificates(editor, `Certificates loaded from the OS (${osCertificateLocation()}):`, certs!.certs);
+}
+
+function osCertificateLocation() {
+	switch (process.platform) {
+		case 'win32':
+			return 'Manage Computer Certificates > Trusted Root Certification Authorities';
+		case 'darwin':
+			return 'Keychain Access > Certificates';
+		case 'linux':
+			return '/etc/ssl/certs/ca-certificates.crt or ca-bundle.crt';
+		default:
+			return 'location unknown';
+	}
 }
 
 async function showBuiltInCertificates() {
