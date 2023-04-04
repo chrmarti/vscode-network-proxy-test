@@ -63,7 +63,8 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 	await appendText(editor, `Sending GET request to ${url}${rejectUnauthorized ? '' : ' (allowing unauthorized)'}...`);
 	try {
 		const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
-			const req = https.get(url, { rejectUnauthorized }, resolve);
+			const httpx = url.startsWith('https:') ? https : http;
+			const req = httpx.get(url, { rejectUnauthorized }, resolve);
 			req.on('error', reject);
 		});
 		const cert = res.socket instanceof tls.TLSSocket ? (res.socket as tls.TLSSocket).getPeerCertificate(true) : undefined;
