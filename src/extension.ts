@@ -7,6 +7,8 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
 import * as tls from 'tls';
+import * as os from 'os';
+import * as path from 'path';
 
 let proxyLookupResponse: ((url: string, response: string) => Promise<void>) | undefined;
 
@@ -47,6 +49,7 @@ async function testConnection(rejectUnauthorized: boolean) {
 	const document = await vscode.workspace.openTextDocument({ language: 'text' });
 	const editor = await vscode.window.showTextDocument(document);
 	await appendText(editor, `Note: Make sure to replace all sensitive information with dummy values before sharing this output.\n`);
+	await logRuntimeInfo(editor);
 	await logSettings(editor);
 	await logEnvVariables(editor);
 	proxyLookupResponse = async (requestedUrl, response) => {
@@ -57,6 +60,15 @@ async function testConnection(rejectUnauthorized: boolean) {
 	};
 	await probeUrl(editor, url, rejectUnauthorized);
 	proxyLookupResponse = undefined;
+}
+
+async function logRuntimeInfo(editor: vscode.TextEditor) {
+	const pkg = require('../package.json');
+	const product = require(path.join(vscode.env.appRoot, 'product.json'));
+	await appendText(editor, `VS Code ${vscode.version} (${product.commit || 'out-of-source'})`);
+	await appendText(editor, `${pkg.displayName} ${pkg.version}`);
+	await appendText(editor, `${os.platform()} ${os.release()} ${os.arch()}`);
+	await appendText(editor, ``);
 }
 
 async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean) {
