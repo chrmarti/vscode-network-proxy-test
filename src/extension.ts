@@ -17,7 +17,13 @@ let proxyLookupResponse: ((url: string, response: string) => Promise<void>) | un
 
 export function activate(context: vscode.ExtensionContext) {
 
-	const agent = requireFromApp('vscode-proxy-agent/out/agent');
+	const agent = (() => {
+		try {
+			return requireFromApp('vscode-proxy-agent/out/agent');
+		} catch {
+			return requireFromApp('@vscode/proxy-agent/out/agent');
+		}
+	})();
 	const origCallback = agent.PacProxyAgent.prototype.callback;
 	agent.PacProxyAgent.prototype.callback = function (...args: any[]) {
 		if (!this.resolverPatched) {
