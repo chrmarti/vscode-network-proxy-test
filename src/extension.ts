@@ -145,7 +145,7 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 			req.on('error', reject);
 		});
 		const cert = res.socket instanceof tls.TLSSocket ? (res.socket as tls.TLSSocket).getPeerCertificate(true) : undefined;
-		await appendText(editor, 'Received response code: ' + res.statusCode);
+		await appendText(editor, `Received response status: ${res.statusCode} ${res.statusMessage}`);
 		if (cert) {
 			await appendText(editor, `Certificate chain:`);
 			let current = cert;
