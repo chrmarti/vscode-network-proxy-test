@@ -61,14 +61,7 @@ async function testConnection(rejectUnauthorized: boolean) {
 	await logHeaderInfo(editor);
 	await logSettings(editor);
 	await logEnvVariables(editor);
-	proxyLookupResponse = async (requestedUrl, response) => {
-		if (requestedUrl === url || requestedUrl === url + '/') {
-			proxyLookupResponse = undefined;
-			await appendText(editor, `vscode-proxy-agent: ${response}`);
-		}
-	};
 	await probeUrl(editor, url, rejectUnauthorized);
-	proxyLookupResponse = undefined;
 }
 
 async function showOSCertificates() {
@@ -139,13 +132,23 @@ async function logRuntimeInfo(editor: vscode.TextEditor) {
 async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean) {
 	await appendText(editor, `Sending GET request to ${url}${rejectUnauthorized ? '' : ' (allowing unauthorized)'}...`);
 	try {
+		proxyLookupResponse = async (requestedUrl, response) => {
+			if (requestedUrl === url || requestedUrl === url + '/') {
+				proxyLookupResponse = undefined;
+				await appendText(editor, `vscode-proxy-agent: ${response}`);
+			}
+		};
 		const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
 			const httpx = url.startsWith('https:') ? https : http;
 			const req = httpx.get(url, { rejectUnauthorized }, resolve);
 			req.on('error', reject);
 		});
 		const cert = res.socket instanceof tls.TLSSocket ? (res.socket as tls.TLSSocket).getPeerCertificate(true) : undefined;
-		await appendText(editor, `Received response status: ${res.statusCode} ${res.statusMessage}`);
+		await appendText(editor, `Received response:`);
+		await appendText(editor, `- Status: ${res.statusCode} ${res.statusMessage}`);
+		if (res.headers.location) {
+			await appendText(editor, `- Location: ${res.headers.location}`);
+		}
 		if (cert) {
 			await appendText(editor, `Certificate chain:`);
 			let current = cert;
@@ -158,7 +161,10 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 				await appendText(editor, `  Validity: ${current.valid_from} - ${current.valid_to}`);
 				await appendText(editor, `  Fingerprint: ${current.fingerprint}`);
 				if (!current.issuerCertificate) {
-					await appendText(editor, `  Issuer certificate not found: ${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}`);
+					// https://github.com/microsoft/vscode/issues/177139#issuecomment-1497180563
+					await appendText(editor, `  Issuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not found. This might indicate an issue with the root certificates registered in your OS:`);
+					await appendText(editor, `  - Make sure that the root certificate for the certificate chain is registered as such in the OS. Use \`F1\` > \`Network Proxy Test: Show OS Certificates\` to see the list loaded by VS Code.`);
+					await appendText(editor, `  - Also make sure that your proxy and server return the complete certificate chain (except for the root certificate).`);
 				} else if (current.issuerCertificate.fingerprint === current.fingerprint) {
 					await appendText(editor, `  Self-signed`);
 				}
@@ -167,7 +173,13 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 			}
 		}
 	} catch (err) {
-		await appendText(editor, 'Received error: ' + (err as any)?.message);
+		await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}`);
+		if (rejectUnauthorized && url.startsWith('https:')) {
+			await appendText(editor, `Retrying while ignoring certificate issues to collect information on the certificate chain.\n`);
+			await probeUrl(editor, url, false);
+		}
+	} finally {
+		proxyLookupResponse = undefined;
 	}
 }
 
