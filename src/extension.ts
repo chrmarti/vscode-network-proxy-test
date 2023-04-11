@@ -149,6 +149,9 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 		if (res.headers.location) {
 			await appendText(editor, `- Location: ${res.headers.location}`);
 		}
+		if (res.statusCode === 407) {
+			await appendText(editor, `- Proxy-Authenticate: ${res.headers['proxy-authenticate']}`);
+		}
 		if (cert) {
 			await appendText(editor, `Certificate chain:`);
 			let current = cert;
@@ -162,15 +165,19 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 				await appendText(editor, `  Fingerprint: ${current.fingerprint}`);
 				if (!current.issuerCertificate) {
 					// https://github.com/microsoft/vscode/issues/177139#issuecomment-1497180563
-					await appendText(editor, `  Issuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not found. This might indicate an issue with the root certificates registered in your OS:`);
-					await appendText(editor, `  - Make sure that the root certificate for the certificate chain is registered as such in the OS. Use \`F1\` > \`Network Proxy Test: Show OS Certificates\` to see the list loaded by VS Code.`);
-					await appendText(editor, `  - Also make sure that your proxy and server return the complete certificate chain (except for the root certificate).`);
+					await appendText(editor, `\nIssuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not found. This might indicate an issue with the root certificates registered in your OS:`);
+					await appendText(editor, `- Make sure that the root certificate for the certificate chain is registered as such in the OS. Use \`F1\` > \`Network Proxy Test: Show OS Certificates\` to see the list loaded by VS Code.`);
+					await appendText(editor, `- Also make sure that your proxy and server return the complete certificate chain (except for the root certificate).`);
 				} else if (current.issuerCertificate.fingerprint === current.fingerprint) {
 					await appendText(editor, `  Self-signed`);
 				}
 				seen.add(current.fingerprint);
 				current = current.issuerCertificate;
 			}
+		}
+		if (res.statusCode === 407) {
+			// https://github.com/microsoft/vscode/issues/179450#issuecomment-1503397566
+			await appendText(editor, `\nAuthentication with the proxy server failed. Proxy authentication isn't well supported yet. You could try setting the HTTP Proxy in VS Code's user settings to \`<http|https>://<username>:<password>@<proxy-server>\`. (\`F1\` > \`Preferences: Open User Settings\` > \`HTTP Proxy\`)`);
 		}
 	} catch (err) {
 		await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}`);
