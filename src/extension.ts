@@ -76,7 +76,7 @@ function osCertificateLocation() {
 		case 'win32':
 			return 'Manage Computer Certificates > Trusted Root Certification Authorities';
 		case 'darwin':
-			return 'Keychain Access > Certificates';
+			return `Keychain Access > Certificates > 'Several Keychains'`;
 		case 'linux':
 			return '/etc/ssl/certs/ca-certificates.crt or ca-bundle.crt';
 		default:
@@ -98,7 +98,7 @@ async function logCertificates(editor: vscode.TextEditor, title: string, certs: 
 		if (current.subjectAltName) {
 			await appendText(editor, `  Subject alt: ${current.subjectAltName}`);
 		}
-		await appendText(editor, `  Validity: ${current.validFrom} - ${current.validTo}`);
+		await appendText(editor, `  Validity: ${current.validFrom} - ${current.validTo}${isPast(current.validTo) ? ' (expired)' : ''}`);
 		await appendText(editor, `  Fingerprint: ${current.fingerprint}`);
 		await appendText(editor, `  Issuer: ${current.issuer.split('\n').join(' ')}`);
 		if (current.keyUsage) {
@@ -154,6 +154,7 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 		}
 		if (cert) {
 			await appendText(editor, `Certificate chain:`);
+			let hasExpired = false;
 			let current = cert;
 			const seen = new Set<string>();
 			while (current && !seen.has(current.fingerprint)) {
@@ -161,7 +162,9 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 				if (current.subjectaltname) {
 					await appendText(editor, `  Subject alt: ${current.subjectaltname}`);
 				}
-				await appendText(editor, `  Validity: ${current.valid_from} - ${current.valid_to}`);
+				const expired = isPast(current.valid_to);
+				hasExpired = hasExpired || expired;
+				await appendText(editor, `  Validity: ${current.valid_from} - ${current.valid_to}${expired ? ' (expired)' : ''}`);
 				await appendText(editor, `  Fingerprint: ${current.fingerprint}`);
 				if (!current.issuerCertificate) {
 					// https://github.com/microsoft/vscode/issues/177139#issuecomment-1497180563
@@ -173,6 +176,10 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 				}
 				seen.add(current.fingerprint);
 				current = current.issuerCertificate;
+			}
+			if (hasExpired) {
+				// https://github.com/microsoft/vscode-remote-release/issues/8207
+				await appendText(editor, `\nOne or more certificates in the certificate chain have expired. Update the expired certificate in your OS' certificate store (${osCertificateLocation()}).`);
 			}
 		}
 		if (res.statusCode === 407) {
@@ -331,4 +338,9 @@ function derToPem(blob: Buffer) {
 	}
 	lines.push('-----END CERTIFICATE-----', '');
 	return lines.join(os.EOL);
+}
+
+function isPast(date: string) {
+	const parsed = Date.parse(date);
+	return !isNaN(parsed) && parsed < Date.now();
 }
