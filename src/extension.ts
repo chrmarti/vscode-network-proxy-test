@@ -90,10 +90,10 @@ async function showBuiltInCertificates() {
 	await logCertificates(editor, 'Certificates built-in with Node.js:', tls.rootCertificates);
 }
 
-async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string>) {
+async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string | crypto.X509Certificate>) {
 	await appendText(editor, title);
 	for (const cert of certs) {
-		const current = new crypto.X509Certificate(cert);
+		const current = typeof cert === 'string' ? new crypto.X509Certificate(cert) : cert;
 		await appendText(editor, `- Subject: ${current.subject.split('\n').join(' ')}`);
 		if (current.subjectAltName) {
 			await appendText(editor, `  Subject alt: ${current.subjectAltName}`);
@@ -157,7 +157,8 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 			let hasExpired = false;
 			let current = cert;
 			const seen = new Set<string>();
-			while (current && !seen.has(current.fingerprint)) {
+			while (!seen.has(current.fingerprint)) {
+				seen.add(current.fingerprint);
 				await appendText(editor, `- Subject: ${current.subject.CN}${current.subject.O ? ` (${current.subject.O})` : ''}`);
 				if (current.subjectaltname) {
 					await appendText(editor, `  Subject alt: ${current.subjectaltname}`);
@@ -166,20 +167,36 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 				hasExpired = hasExpired || expired;
 				await appendText(editor, `  Validity: ${current.valid_from} - ${current.valid_to}${expired ? ' (expired)' : ''}`);
 				await appendText(editor, `  Fingerprint: ${current.fingerprint}`);
-				if (!current.issuerCertificate) {
-					// https://github.com/microsoft/vscode/issues/177139#issuecomment-1497180563
-					await appendText(editor, `\nIssuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not found. This might indicate an issue with the root certificates registered in your OS:`);
-					await appendText(editor, `- Make sure that the root certificate for the certificate chain is registered as such in the OS. Use \`F1\` > \`Network Proxy Test: Show OS Certificates\` to see the list loaded by VS Code.`);
-					await appendText(editor, `- Also make sure that your proxy and server return the complete certificate chain (except for the root certificate).`);
-				} else if (current.issuerCertificate.fingerprint === current.fingerprint) {
-					await appendText(editor, `  Self-signed`);
+				if (current.issuerCertificate) {
+					if (current.issuerCertificate.fingerprint512 === current.fingerprint512) {
+						await appendText(editor, `  Self-signed`);
+					}
+					current = current.issuerCertificate;
+				} else {
+					await appendText(editor, `  Issuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not in certificate chain of the server.`);
 				}
-				seen.add(current.fingerprint);
-				current = current.issuerCertificate;
+			}
+			const osCerts = await readCaCertificates();
+			const certs = (osCerts ? (osCerts.append ? [...tls.rootCertificates, ...osCerts.certs] : osCerts.certs) : tls.rootCertificates)
+				.map(pem => new crypto.X509Certificate(pem));
+			const uniqCerts = [...new Map(certs.map(cert => [cert.fingerprint512, cert] as const)).values()];
+			const toVerify = new crypto.X509Certificate(current.raw);
+			const toVerifyPublicKey = toVerify.publicKey.export({ type: 'spki', format: 'der' });
+			const localRoots = uniqCerts.filter(cert => cert.publicKey.export({ type: 'spki', format: 'der' }).equals(toVerifyPublicKey) || toVerify.checkIssued(cert));
+			if (localRoots.length) {
+				const localRootsUnexpired = localRoots.filter(cert => !isPast(cert.validTo));
+				const allRootsExpired = !localRootsUnexpired.length;
+				await logCertificates(editor, `Local root certificates:`, allRootsExpired ? localRoots : localRootsUnexpired);
+				hasExpired = hasExpired || allRootsExpired;
+			} else {
+				// https://github.com/microsoft/vscode/issues/177139#issuecomment-1497180563
+				await appendText(editor, `\nLast certificate not verified by OS root certificates. This might indicate an issue with the root certificates registered in your OS:`);
+				await appendText(editor, `- Make sure that the root certificate for the certificate chain is registered as such in the OS. Use \`F1\` > \`Network Proxy Test: Show OS Certificates\` to see the list loaded by VS Code.`);
+				await appendText(editor, `- Also make sure that your proxy and server return the complete certificate chain (except possibly for the root certificate).`);
 			}
 			if (hasExpired) {
 				// https://github.com/microsoft/vscode-remote-release/issues/8207
-				await appendText(editor, `\nOne or more certificates in the certificate chain have expired. Update the expired certificate in your OS' certificate store (${osCertificateLocation()}).`);
+				await appendText(editor, `\nOne or more certificates have expired. Update the expired certificates in the server's response and in your OS' certificate store (${osCertificateLocation()}).`);
 			}
 		}
 		if (res.statusCode === 407) {
