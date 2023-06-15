@@ -6,6 +6,8 @@
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
+import * as http2 from 'http2';
+import * as net from 'net';
 import * as tls from 'tls';
 import * as os from 'os';
 import * as path from 'path';
@@ -41,13 +43,13 @@ export function activate(context: vscode.ExtensionContext) {
 		return origCallback.apply(this, args);
 	};
 
-	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection', () => testConnection(true)));
-	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection-allow-unauthorized', () => testConnection(false)));
+	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection', () => testConnection(false)));
+	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection-http2', () => testConnection(true)));
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.show-os-certificates', () => showOSCertificates()));
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.show-builtin-certificates', () => showBuiltInCertificates()));
 }
 
-async function testConnection(rejectUnauthorized: boolean) {
+async function testConnection(useHTTP2: boolean) {
 	const url = await vscode.window.showInputBox({
 		prompt: 'Enter URL to probe',
 		value: 'https://example.com',
@@ -61,7 +63,7 @@ async function testConnection(rejectUnauthorized: boolean) {
 	await logHeaderInfo(editor);
 	await logSettings(editor);
 	await logEnvVariables(editor);
-	await probeUrl(editor, url, rejectUnauthorized);
+	await probeUrl(editor, url, true, useHTTP2);
 }
 
 async function showOSCertificates() {
@@ -129,8 +131,8 @@ async function logRuntimeInfo(editor: vscode.TextEditor) {
 	await appendText(editor, ``);
 }
 
-async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean) {
-	await appendText(editor, `Sending GET request to ${url}${rejectUnauthorized ? '' : ' (allowing unauthorized)'}...`);
+async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean, useHTTP2: boolean) {
+	await appendText(editor, `Sending${useHTTP2 ? ' HTTP2' : ''} GET request to ${url}${rejectUnauthorized ? '' : ' (allowing unauthorized)'}...`);
 	try {
 		proxyLookupResponse = async (requestedUrl, response) => {
 			if (requestedUrl === url || requestedUrl === url + '/') {
@@ -138,11 +140,7 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 				await appendText(editor, `vscode-proxy-agent: ${response}`);
 			}
 		};
-		const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
-			const httpx = url.startsWith('https:') ? https : http;
-			const req = httpx.get(url, { rejectUnauthorized }, resolve);
-			req.on('error', reject);
-		});
+		const res = useHTTP2 ? await http2Get(url, rejectUnauthorized) : await httpGet(url, rejectUnauthorized);
 		const cert = res.socket instanceof tls.TLSSocket ? (res.socket as tls.TLSSocket).getPeerCertificate(true) : undefined;
 		await appendText(editor, `Received response:`);
 		await appendText(editor, `- Status: ${res.statusCode} ${res.statusMessage}`);
@@ -207,24 +205,58 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 		await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}`);
 		if (rejectUnauthorized && url.startsWith('https:')) {
 			await appendText(editor, `Retrying while ignoring certificate issues to collect information on the certificate chain.\n`);
-			await probeUrl(editor, url, false);
+			await probeUrl(editor, url, false, useHTTP2);
 		}
 	} finally {
 		proxyLookupResponse = undefined;
 	}
 }
 
+async function httpGet(url: string, rejectUnauthorized: boolean) {
+	return await new Promise<http.IncomingMessage>((resolve, reject) => {
+		const httpx = url.startsWith('https:') ? https : http;
+		const req = httpx.get(url, { rejectUnauthorized }, resolve);
+		req.on('error', reject);
+	});
+}
+
+async function http2Get(url: string, rejectUnauthorized: boolean) {
+	return new Promise<{ socket: net.Socket | tls.TLSSocket, headers: NodeJS.Dict<string | string[]>, statusCode: number, statusMessage: string }>(async (resolve, reject) => {
+		let socket: net.Socket | tls.TLSSocket;
+		const client = http2.connect(url, {
+			rejectUnauthorized,
+		}, (_session, _socket) => {
+			socket = _socket;
+		});
+		client.on('error', reject);
+
+		const urlObj = new URL(url);
+		const req = client.request({
+			[http2.constants.HTTP2_HEADER_PATH]: urlObj.pathname,
+		});
+
+		req.on('response', (headers, _flags) => {
+			const statusCode = headers[':status']!;
+			const statusMessage = headers[':status-text'] || http.STATUS_CODES[statusCode] || 'Unknown';
+			resolve({ socket, headers, statusCode, statusMessage: Array.isArray(statusMessage) ? statusMessage.join() : statusMessage });
+			client.close();
+		});
+		req.end();
+	});
+}
+
 async function logSettings(editor: vscode.TextEditor) {
 	await appendText(editor, 'Settings:');
-	const settingsIds = ['http.proxy', 'http.proxyAuthorization', 'http.proxyStrictSSL', 'http.proxySupport', 'http.systemCertificates'];
+	const settingsIds = ['http.proxy', 'http.proxyAuthorization', 'http.proxyStrictSSL', 'http.proxySupport', 'http.systemCertificates', 'http.experimental.systemCertificatesV2'];
 	const conf = vscode.workspace.getConfiguration();
 	for (const id of settingsIds) {
-		await appendText(editor, `- ${id}: ${conf.get<string>(id)}`);
 		const obj = conf.inspect<string>(id);
-		for (const key in obj) {
-			const value = (obj as any)[key];
-			if (key !== 'key' && key !== 'defaultValue' && value !== undefined) {
-				await appendText(editor, `  - ${key}: ${value}`);
+		const keys = Object.keys(obj || {})
+			.filter(key => key !== 'key' && key !== 'defaultValue' && (obj as any)[key] !== undefined);
+		if (id.toLowerCase().indexOf('experimental') === -1 || keys.length) {
+			await appendText(editor, `- ${id}: ${conf.get<string>(id)}`);
+			for (const key of keys) {
+				await appendText(editor, `  - ${key}: ${(obj as any)[key]}`);
 			}
 		}
 	}

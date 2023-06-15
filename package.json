@@ -3,7 +3,7 @@
 	"displayName": "Network Proxy Test",
 	"license": "MIT",
 	"publisher": "chrmarti",
-	"version": "0.0.7",
+	"version": "0.0.8",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/chrmarti/vscode-network-proxy-test.git"
@@ -25,9 +25,9 @@
 				"title": "Test Network Connection"
 			},
 			{
-				"command": "network-proxy-test.test-connection-allow-unauthorized",
+				"command": "network-proxy-test.test-connection-http2",
 				"category": "Network Proxy Test",
-				"title": "Test Network Connection (Allow Unauthorized)"
+				"title": "Test Network Connection (HTTP2)"
 			},
 			{
 				"command": "network-proxy-test.show-os-certificates",
