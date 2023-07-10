@@ -92,11 +92,11 @@ async function showBuiltInCertificates() {
 	await logCertificates(editor, 'Certificates built-in with Node.js:', tls.rootCertificates);
 }
 
-async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string | crypto.X509Certificate>) {
+async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string | crypto.X509Certificate | { from: string[]; cert: crypto.X509Certificate }>) {
 	await appendText(editor, title);
 	for (const cert of certs) {
-		const current = typeof cert === 'string' ? new crypto.X509Certificate(cert) : cert;
-		await appendText(editor, `- Subject: ${current.subject.split('\n').join(' ')}`);
+		const current = typeof cert === 'string' ? new crypto.X509Certificate(cert) : cert instanceof crypto.X509Certificate ? cert : cert.cert;
+		await appendText(editor, `- Subject: ${current.subject.split('\n').join(' ')}${ typeof cert === 'object' && 'from' in cert ? ` (${cert.from.join(' and ')})` : ''}`);
 		if (current.subjectAltName) {
 			await appendText(editor, `  Subject alt: ${current.subjectAltName}`);
 		}
@@ -174,17 +174,14 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 					await appendText(editor, `  Issuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not in certificate chain of the server.`);
 				}
 			}
-			const osCerts = await readCaCertificates();
-			const certs = (osCerts ? (osCerts.append ? [...tls.rootCertificates, ...osCerts.certs] : osCerts.certs) : tls.rootCertificates)
-				.map(pem => new crypto.X509Certificate(pem));
-			const uniqCerts = [...new Map(certs.map(cert => [cert.fingerprint512, cert] as const)).values()];
+			const uniqCerts = await getAllCaCertificates();
 			const toVerify = new crypto.X509Certificate(current.raw);
 			const toVerifyPublicKey = toVerify.publicKey.export({ type: 'spki', format: 'der' });
-			const localRoots = uniqCerts.filter(cert => cert.publicKey.export({ type: 'spki', format: 'der' }).equals(toVerifyPublicKey) || toVerify.checkIssued(cert));
+			const localRoots = uniqCerts.filter(({ cert }) => cert.publicKey.export({ type: 'spki', format: 'der' }).equals(toVerifyPublicKey) || toVerify.checkIssued(cert));
 			if (localRoots.length) {
-				const localRootsUnexpired = localRoots.filter(cert => !isPast(cert.validTo));
+				const localRootsUnexpired = localRoots.filter(({ cert }) => !isPast(cert.validTo));
 				const allRootsExpired = !localRootsUnexpired.length;
-				await logCertificates(editor, `Local root certificates:`, allRootsExpired ? localRoots : localRootsUnexpired);
+				await logCertificates(editor, `Local root certificates:`, localRoots);
 				hasExpired = hasExpired || allRootsExpired;
 			} else {
 				// https://github.com/microsoft/vscode/issues/177139#issuecomment-1497180563
@@ -210,6 +207,28 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 	} finally {
 		proxyLookupResponse = undefined;
 	}
+}
+
+async function getAllCaCertificates() {
+	const osCerts = await readCaCertificates();
+	const certMap = new Map<string, { from: string[]; cert: crypto.X509Certificate; }>();
+	if (!osCerts || osCerts.append) {
+		for (const pem of tls.rootCertificates) {
+			const cert = new crypto.X509Certificate(pem);
+			certMap.set(cert.fingerprint512, { from: ['built-in'], cert });
+		}
+	}
+	if (osCerts) {
+		for (const pem of osCerts.certs) {
+			const cert = new crypto.X509Certificate(pem);
+			if (certMap.has(cert.fingerprint512)) {
+				certMap.get(cert.fingerprint512)!.from.push('OS');
+			} else {
+				certMap.set(cert.fingerprint512, { from: ['OS'], cert });
+			}
+		}
+	}
+	return [...certMap.values()];
 }
 
 async function httpGet(url: string, rejectUnauthorized: boolean) {
