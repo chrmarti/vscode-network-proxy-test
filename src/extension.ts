@@ -95,7 +95,12 @@ async function showBuiltInCertificates() {
 async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string | crypto.X509Certificate | { from: string[]; cert: crypto.X509Certificate }>) {
 	await appendText(editor, title);
 	for (const cert of certs) {
-		const current = typeof cert === 'string' ? new crypto.X509Certificate(cert) : cert instanceof crypto.X509Certificate ? cert : cert.cert;
+		const current = typeof cert === 'string' ? tryParseCertificate(cert) : cert instanceof crypto.X509Certificate ? cert : cert.cert;
+		if (!(current instanceof crypto.X509Certificate)) {
+			await appendText(editor, `- Certificate parse error: ${(current as any)?.message || String(current)}`);
+			await appendText(editor, `  Input:\n${cert}`);
+			continue;
+		}
 		await appendText(editor, `- Subject: ${current.subject.split('\n').join(' ')}${ typeof cert === 'object' && 'from' in cert ? ` (${cert.from.join(' and ')})` : ''}`);
 		if (current.subjectAltName) {
 			await appendText(editor, `  Subject alt: ${current.subjectAltName}`);
@@ -214,21 +219,33 @@ async function getAllCaCertificates() {
 	const certMap = new Map<string, { from: string[]; cert: crypto.X509Certificate; }>();
 	if (!osCerts || osCerts.append) {
 		for (const pem of tls.rootCertificates) {
-			const cert = new crypto.X509Certificate(pem);
-			certMap.set(cert.fingerprint512, { from: ['built-in'], cert });
+			const cert = tryParseCertificate(pem);
+			if (cert instanceof crypto.X509Certificate) {
+				certMap.set(cert.fingerprint512, { from: ['built-in'], cert });
+			}
 		}
 	}
 	if (osCerts) {
 		for (const pem of osCerts.certs) {
-			const cert = new crypto.X509Certificate(pem);
-			if (certMap.has(cert.fingerprint512)) {
-				certMap.get(cert.fingerprint512)!.from.push('OS');
-			} else {
-				certMap.set(cert.fingerprint512, { from: ['OS'], cert });
+			const cert = tryParseCertificate(pem);
+			if (cert instanceof crypto.X509Certificate) {
+				if (certMap.has(cert.fingerprint512)) {
+					certMap.get(cert.fingerprint512)!.from.push('OS');
+				} else {
+					certMap.set(cert.fingerprint512, { from: ['OS'], cert });
+				}
 			}
 		}
 	}
 	return [...certMap.values()];
+}
+
+function tryParseCertificate(pem: string) {
+	try {
+		return new crypto.X509Certificate(pem);
+	} catch (err) {
+		return err;
+	}
 }
 
 async function httpGet(url: string, rejectUnauthorized: boolean) {
