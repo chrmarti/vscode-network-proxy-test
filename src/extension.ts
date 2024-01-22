@@ -26,8 +26,10 @@ export function activate(context: vscode.ExtensionContext) {
 			return requireFromApp('@vscode/proxy-agent/out/agent');
 		}
 	})();
-	const origCallback = agent.PacProxyAgent.prototype.callback;
-	agent.PacProxyAgent.prototype.callback = function (...args: any[]) {
+	const innerAgent = agent.PacProxyAgent.prototype;
+	const callbackName = innerAgent.connect ? 'connect' : 'callback';
+	const origCallback = innerAgent[callbackName];
+	innerAgent[callbackName] = function (...args: any[]) {
 		if (!this.resolverPatched) {
 			this.resolverPatched = true;
 			const origResolver = this.resolver;
