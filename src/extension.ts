@@ -164,7 +164,7 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 			const seen = new Set<string>();
 			while (!seen.has(current.fingerprint)) {
 				seen.add(current.fingerprint);
-				await appendText(editor, `- Subject: ${current.subject.CN}${current.subject.O ? ` (${current.subject.O})` : ''}`);
+				await appendText(editor, `- Subject: ${current.subject?.CN}${current.subject?.O ? ` (${current.subject.O})` : ''}`); // Subject can be undefined? https://github.com/microsoft/vscode-remote-release/issues/9212#issuecomment-1851917503
 				if (current.subjectaltname) {
 					await appendText(editor, `  Subject alt: ${current.subjectaltname}`);
 				}
