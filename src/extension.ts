@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+/// <reference path='vscode-proxy-agent.d.ts' />
+
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
@@ -14,6 +16,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as cp from 'child_process';
+import type * as proxyAgentType from './vscode-proxy-agent';
 
 let proxyLookupResponse: ((url: string, response: string) => Promise<void>) | undefined;
 
@@ -72,7 +75,7 @@ async function showOSCertificates() {
 	const editor = await openEmptyEditor();
 	await logHeaderInfo(editor);
 	const certs = await readCaCertificates();
-	await logCertificates(editor, `Certificates loaded from the OS (${osCertificateLocation()}):`, certs!.certs);
+	await logCertificates(editor, `Certificates loaded from the OS (${osCertificateLocation()}):`, certs!);
 }
 
 function osCertificateLocation() {
@@ -94,7 +97,7 @@ async function showBuiltInCertificates() {
 	await logCertificates(editor, 'Certificates built-in with Node.js:', tls.rootCertificates);
 }
 
-async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string | crypto.X509Certificate | { from: string[]; cert: crypto.X509Certificate }>) {
+async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string | { from: string[]; pem: string; cert: crypto.X509Certificate }>) {
 	await appendText(editor, title);
 	for (const cert of certs) {
 		const current = typeof cert === 'string' ? tryParseCertificate(cert) : cert instanceof crypto.X509Certificate ? cert : cert.cert;
@@ -103,6 +106,7 @@ async function logCertificates(editor: vscode.TextEditor, title: string, certs: 
 			await appendText(editor, `  Input:\n${cert}`);
 			continue;
 		}
+		// await appendText(editor, `- Raw:\n${typeof cert === 'string' ? cert : cert.pem}`);
 		await appendText(editor, `- Subject: ${current.subject.split('\n').join(' ')}${ typeof cert === 'object' && 'from' in cert ? ` (${cert.from.join(' and ')})` : ''}`);
 		if (current.subjectAltName) {
 			await appendText(editor, `  Subject alt: ${current.subjectAltName}`);
@@ -181,6 +185,7 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 					await appendText(editor, `  Issuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not in certificate chain of the server.`);
 				}
 			}
+			// await appendText(editor, `  Raw:\n${derToPem(cert.raw)}`);
 			const uniqCerts = await getAllCaCertificates();
 			const toVerify = new crypto.X509Certificate(current.raw);
 			const toVerifyPublicKey = toVerify.publicKey.export({ type: 'spki', format: 'der' });
@@ -218,23 +223,21 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 
 async function getAllCaCertificates() {
 	const osCerts = await readCaCertificates();
-	const certMap = new Map<string, { from: string[]; cert: crypto.X509Certificate; }>();
-	if (!osCerts || osCerts.append) {
-		for (const pem of tls.rootCertificates) {
-			const cert = tryParseCertificate(pem);
-			if (cert instanceof crypto.X509Certificate) {
-				certMap.set(cert.fingerprint512, { from: ['built-in'], cert });
-			}
+	const certMap = new Map<string, { from: string[]; pem: string; cert: crypto.X509Certificate; }>();
+	for (const pem of tls.rootCertificates) {
+		const cert = tryParseCertificate(pem);
+		if (cert instanceof crypto.X509Certificate) {
+			certMap.set(cert.fingerprint512, { from: ['built-in'], pem, cert });
 		}
 	}
 	if (osCerts) {
-		for (const pem of osCerts.certs) {
+		for (const pem of osCerts) {
 			const cert = tryParseCertificate(pem);
 			if (cert instanceof crypto.X509Certificate) {
 				if (certMap.has(cert.fingerprint512)) {
 					certMap.get(cert.fingerprint512)!.from.push('OS');
 				} else {
-					certMap.set(cert.fingerprint512, { from: ['OS'], cert });
+					certMap.set(cert.fingerprint512, { from: ['OS'], pem, cert });
 				}
 			}
 		}
@@ -336,6 +339,13 @@ function requireFromApp(moduleName: string) {
 // From https://github.com/microsoft/vscode-proxy-agent/blob/4410a426f444c1203142c0b72dd09f63650ba1a4/src/index.ts#L401:
 
 async function readCaCertificates() {
+
+	const proxyAgent = requireFromApp('@vscode/proxy-agent');
+	if (proxyAgent.loadSystemCertificates) {
+		const agent: typeof proxyAgentType = proxyAgent;
+		return agent.loadSystemCertificates({ log: console });
+	}
+
 	if (process.platform === 'win32') {
 		return readWindowsCaCertificates();
 	}
@@ -370,10 +380,7 @@ async function readWindowsCaCertificates() {
 	}
 
 	const certs = new Set(ders.map(derToPem));
-	return {
-		certs: Array.from(certs),
-		append: true
-	};
+	return Array.from(certs);
 }
 
 async function readMacCaCertificates() {
@@ -387,15 +394,13 @@ async function readMacCaCertificates() {
 	});
 	const certs = new Set(stdout.split(/(?=-----BEGIN CERTIFICATE-----)/g)
 		.filter(pem => !!pem.length));
-	return {
-		certs: Array.from(certs),
-		append: true
-	};
+	return Array.from(certs);
 }
 
 const linuxCaCertificatePaths = [
-	'/etc/ssl/certs/ca-certificates.crt',
-	'/etc/ssl/certs/ca-bundle.crt',
+	'/etc/ssl/certs/ca-certificates.crt', // Debian / Ubuntu / Alpine / Fedora
+	'/etc/ssl/certs/ca-bundle.crt', // Fedora
+	'/etc/ssl/ca-bundle.pem', // OpenSUSE
 ];
 
 async function readLinuxCaCertificates() {
@@ -404,17 +409,14 @@ async function readLinuxCaCertificates() {
 			const content = await fs.promises.readFile(certPath, { encoding: 'utf8' });
 			const certs = new Set(content.split(/(?=-----BEGIN CERTIFICATE-----)/g)
 				.filter(pem => !!pem.length));
-			return {
-				certs: Array.from(certs),
-				append: false
-			};
+			return Array.from(certs);
 		} catch (err: any) {
 			if (err?.code !== 'ENOENT') {
 				throw err;
 			}
 		}
 	}
-	return undefined;
+	return [];
 }
 
 function derToPem(blob: Buffer) {
