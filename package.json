@@ -3,7 +3,7 @@
 	"displayName": "Network Proxy Test",
 	"license": "MIT",
 	"publisher": "chrmarti",
-	"version": "0.0.11",
+	"version": "0.0.12",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/chrmarti/vscode-network-proxy-test.git"
@@ -48,7 +48,7 @@
 		"lint": "eslint src --ext ts"
 	},
 	"devDependencies": {
-		"@types/node": "^18.15.11",
+		"@types/node": "^20.14.10",
 		"@types/vscode": "^1.77.0",
 		"@typescript-eslint/eslint-plugin": "^5.57.0",
 		"@typescript-eslint/parser": "^5.57.0",

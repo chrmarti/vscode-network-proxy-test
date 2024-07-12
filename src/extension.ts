@@ -139,6 +139,9 @@ async function logRuntimeInfo(editor: vscode.TextEditor) {
 	await appendText(editor, `VS Code ${vscode.version} (${product.commit || 'out-of-source'})`);
 	await appendText(editor, `${pkg.displayName} ${pkg.version}`);
 	await appendText(editor, `${os.platform()} ${os.release()} ${os.arch()}`);
+	if (vscode.env.remoteName) {
+		await appendText(editor, `Remote: ${vscode.env.remoteName}`);
+	}
 	await appendText(editor, ``);
 }
 
@@ -219,6 +222,33 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 	} finally {
 		proxyLookupResponse = undefined;
 	}
+
+	const fetch = loadFetch();
+	if (fetch) {
+		await appendText(editor, `\nSending GET request to ${url} using fetch API...`);
+		try {
+			const res = await fetch(url, { redirect: 'manual' });
+			await appendText(editor, `Received response:`);
+			await appendText(editor, `- Status: ${res.status} ${res.statusText}`);
+			if (res.headers.has('location')) {
+				await appendText(editor, `- Location: ${res.headers.get('location')}`);
+			}
+			if (res.status === 407) {
+				await appendText(editor, `- Proxy-Authenticate: ${res.headers.get('proxy-authenticate')}`);
+			}
+		} catch (err) {
+			await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}`);
+		}
+	}
+}
+
+function loadFetch(): typeof fetch | undefined {
+	try {
+		return require('electron')?.net?.fetch;
+	} catch (err) {
+		// Not available.
+	}
+	return undefined;
 }
 
 async function getAllCaCertificates() {
