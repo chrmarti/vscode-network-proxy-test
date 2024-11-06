@@ -223,11 +223,20 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 		proxyLookupResponse = undefined;
 	}
 
-	const fetch = loadFetch();
-	if (fetch) {
-		await appendText(editor, `\nSending GET request to ${url} using fetch API...`);
+	const fetchImpls: { label: string; impl: typeof fetch | undefined }[] = [
+		{
+			label: 'Electron',
+			impl: loadElectronFetch(),
+		},
+		{
+			label: 'Node.js',
+			impl: (globalThis as any).__vscodePatchedFetch || globalThis.fetch,
+		},
+	].filter(({ impl }) => !!impl);
+	for (const { label, impl } of fetchImpls) {
+		await appendText(editor, `\nSending GET request to ${url} using fetch from ${label}...`);
 		try {
-			const res = await fetch(url, { redirect: 'manual' });
+			const res = await impl!(url, { redirect: 'manual' });
 			await appendText(editor, `Received response:`);
 			await appendText(editor, `- Status: ${res.status} ${res.statusText}`);
 			if (res.headers.has('location')) {
@@ -242,7 +251,7 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 	}
 }
 
-function loadFetch(): typeof fetch | undefined {
+function loadElectronFetch(): typeof fetch | undefined {
 	try {
 		return require('electron')?.net?.fetch;
 	} catch (err) {
@@ -316,11 +325,21 @@ async function http2Get(url: string, rejectUnauthorized: boolean) {
 	});
 }
 
+const networkSettingsIds = [
+	'http.proxy',
+	'http.proxyAuthorization',
+	'http.proxyStrictSSL',
+	'http.proxySupport',
+	'http.systemCertificates',
+	'http.experimental.systemCertificatesV2',
+	'http.electronFetch',
+	'http.fetchAdditionalSupport',
+];
+
 async function logSettings(editor: vscode.TextEditor) {
 	await appendText(editor, 'Settings:');
-	const settingsIds = ['http.proxy', 'http.proxyAuthorization', 'http.proxyStrictSSL', 'http.proxySupport', 'http.systemCertificates', 'http.experimental.systemCertificatesV2'];
 	const conf = vscode.workspace.getConfiguration();
-	for (const id of settingsIds) {
+	for (const id of networkSettingsIds) {
 		const obj = conf.inspect<string>(id);
 		const keys = Object.keys(obj || {})
 			.filter(key => key !== 'key' && key !== 'defaultValue' && (obj as any)[key] !== undefined);
