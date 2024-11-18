@@ -16,6 +16,8 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as cp from 'child_process';
+import * as dns from 'dns';
+import * as util from 'util';
 import type * as proxyAgentType from './vscode-proxy-agent';
 
 let proxyLookupResponse: ((url: string, response: string) => Promise<void>) | undefined;
@@ -68,6 +70,7 @@ async function testConnection(useHTTP2: boolean) {
 	await logHeaderInfo(editor);
 	await logSettings(editor);
 	await logEnvVariables(editor);
+	await lookupHosts(editor, url);
 	await probeUrl(editor, url, true, useHTTP2);
 }
 
@@ -143,6 +146,28 @@ async function logRuntimeInfo(editor: vscode.TextEditor) {
 		await appendText(editor, `Remote: ${vscode.env.remoteName}`);
 	}
 	await appendText(editor, ``);
+}
+
+async function lookupHosts(editor: vscode.TextEditor, url: string) {
+	const host = new URL(url).hostname;
+	const timeoutSeconds = 10;
+	const dnsLookup = util.promisify(dns.lookup);
+	await appendText(editor, `DNS Lookup:`);
+	for (const family of [4, 6]) {
+		await appendText(editor, `- ipv${family}: `, false);
+		const start = Date.now();
+		try {
+			const dnsResult = await Promise.race([dnsLookup(host, { family }), delay(timeoutSeconds * 1000)]);
+			if (dnsResult) {
+				await appendText(editor, `${dnsResult.address} (${Date.now() - start} ms)`);
+			} else {
+				await appendText(editor, `timed out after ${timeoutSeconds} seconds`);
+			}
+		} catch (err: any) {
+			await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}`);
+		}
+	}
+	await appendText(editor, '');
 }
 
 async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean, useHTTP2: boolean) {
@@ -364,9 +389,9 @@ async function logEnvVariables(editor: vscode.TextEditor) {
 	await appendText(editor, '');
 }
 
-async function appendText(editor: vscode.TextEditor, string: string) {
+async function appendText(editor: vscode.TextEditor, string: string, appendEOL = true) {
 	await editor.edit(builder => {
-		builder.insert(editor.document.lineAt(editor.document.lineCount - 1).range.end, string + '\n');
+		builder.insert(editor.document.lineAt(editor.document.lineCount - 1).range.end, appendEOL ? string + '\n' : string);
 	});
 }
 
@@ -383,6 +408,10 @@ function requireFromApp(moduleName: string) {
 		// Not available.
 	}
 	throw new Error(`Could not load ${moduleName} from ${appRoot}`);
+}
+
+function delay(ms: number) {
+	return new Promise<void>(resolve => setTimeout(resolve, ms));
 }
 
 // From https://github.com/microsoft/vscode-proxy-agent/blob/4410a426f444c1203142c0b72dd09f63650ba1a4/src/index.ts#L401:
