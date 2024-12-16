@@ -18,6 +18,7 @@ import * as fs from 'fs';
 import * as cp from 'child_process';
 import * as dns from 'dns';
 import * as util from 'util';
+import * as undici from 'undici';
 import type * as proxyAgentType from './vscode-proxy-agent';
 
 let proxyLookupResponse: ((url: string, response: string) => Promise<void>) | undefined;
@@ -257,6 +258,10 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 			label: 'Node.js',
 			impl: (globalThis as any).__vscodePatchedFetch || globalThis.fetch,
 		},
+		{
+			label: 'Node.js (allow HTTP2)',
+			impl: getNodeFetchWithH2(),
+		},
 	].filter(({ impl }) => !!impl);
 	for (const { label, impl } of fetchImpls) {
 		await appendText(editor, `\nSending GET request to ${url} using fetch from ${label}...`);
@@ -283,6 +288,13 @@ function loadElectronFetch(): typeof fetch | undefined {
 		// Not available.
 	}
 	return undefined;
+}
+
+function getNodeFetchWithH2(): typeof globalThis.fetch {
+	const fetch = (globalThis as any).__vscodePatchedFetch || globalThis.fetch;
+	return function (input: string | URL | globalThis.Request, init?: RequestInit) {
+		return fetch(input, { dispatcher: new undici.Agent({ allowH2: true }), ...init });
+	};
 }
 
 async function getAllCaCertificates() {
