@@ -364,41 +364,52 @@ async function http2Get(url: string, rejectUnauthorized: boolean) {
 
 const networkSettingsIds = [
 	'http.proxy',
+	'http.noProxy',
 	'http.proxyAuthorization',
 	'http.proxyStrictSSL',
 	'http.proxySupport',
-	'http.systemCertificates',
-	'http.experimental.systemCertificatesV2',
 	'http.electronFetch',
 	'http.fetchAdditionalSupport',
+	'http.proxyKerberosServicePrincipal',
+	'http.systemCertificates',
+	'http.experimental.systemCertificatesV2',
 ];
 
 async function logSettings(editor: vscode.TextEditor) {
-	await appendText(editor, 'Settings:');
 	const conf = vscode.workspace.getConfiguration();
-	for (const id of networkSettingsIds) {
+	const settings = networkSettingsIds.map(id => {
 		const obj = conf.inspect<string>(id);
 		const keys = Object.keys(obj || {})
 			.filter(key => key !== 'key' && key !== 'defaultValue' && (obj as any)[key] !== undefined);
-		if (id.toLowerCase().indexOf('experimental') === -1 || keys.length) {
+		return { id, obj, keys };
+	}).filter(({ keys }) => keys.length);
+	if (settings.length) {
+		await appendText(editor, 'Settings:');
+		for (const { id, obj, keys } of settings) {
 			await appendText(editor, `- ${id}: ${conf.get<string>(id)}`);
 			for (const key of keys) {
 				await appendText(editor, `  - ${key}: ${(obj as any)[key]}`);
 			}
 		}
+		await appendText(editor, '');
 	}
-	await appendText(editor, '');
 }
 
 async function logEnvVariables(editor: vscode.TextEditor) {
-	await appendText(editor, 'Environment variables:');
 	const envVars = ['http_proxy', 'https_proxy', 'ftp_proxy', 'all_proxy', 'no_proxy'];
+	const setEnvVars = [];
 	for (const env in process.env) {
 		if (envVars.includes(env.toLowerCase())) {
-			await appendText(editor, `${env}=${process.env[env]}`);
+			setEnvVars.push(env);
 		}
 	}
-	await appendText(editor, '');
+	if (setEnvVars.length) {
+		await appendText(editor, 'Environment variables:');
+		for (const env of setEnvVars) {
+			await appendText(editor, `${env}=${process.env[env]}`);
+		}
+		await appendText(editor, '');
+	}
 }
 
 async function appendText(editor: vscode.TextEditor, string: string, appendEOL = true) {
