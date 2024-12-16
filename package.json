@@ -9,7 +9,7 @@
 		"url": "https://github.com/chrmarti/vscode-network-proxy-test.git"
 	},
 	"engines": {
-		"vscode": "^1.77.0"
+		"vscode": "^1.96.0"
 	},
 	"categories": [
 		"Other"
@@ -52,7 +52,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^20.14.10",
-		"@types/vscode": "^1.77.0",
+		"@types/vscode": "^1.96.0",
 		"@typescript-eslint/eslint-plugin": "^5.57.0",
 		"@typescript-eslint/parser": "^5.57.0",
 		"eslint": "^8.37.0",

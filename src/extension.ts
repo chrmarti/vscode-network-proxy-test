@@ -21,36 +21,9 @@ import * as util from 'util';
 import * as undici from 'undici';
 import type * as proxyAgentType from './vscode-proxy-agent';
 
-let proxyLookupResponse: ((url: string, response: string) => Promise<void>) | undefined;
+const proxyAgent: typeof proxyAgentType | undefined = loadVSCodeModule<any>('@vscode/proxy-agent');
 
 export function activate(context: vscode.ExtensionContext) {
-
-	const agent = (() => {
-		try {
-			return requireFromApp('vscode-proxy-agent/out/agent');
-		} catch {
-			return requireFromApp('@vscode/proxy-agent/out/agent');
-		}
-	})();
-	const innerAgent = agent.PacProxyAgent.prototype;
-	const callbackName = innerAgent.connect ? 'connect' : 'callback';
-	const origCallback = innerAgent[callbackName];
-	innerAgent[callbackName] = function (...args: any[]) {
-		if (!this.resolverPatched) {
-			this.resolverPatched = true;
-			const origResolver = this.resolver;
-			this.resolver = async (...args: any[]) => {
-				const url = args[2];
-				const res = await origResolver.apply(this, args);
-				if (proxyLookupResponse) {
-					await proxyLookupResponse(url, res);
-				}
-				return res;
-			};
-		}
-		return origCallback.apply(this, args);
-	};
-
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection', () => testConnection(false)));
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection-http2', () => testConnection(true)));
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.show-os-certificates', () => showOSCertificates()));
@@ -78,7 +51,7 @@ async function testConnection(useHTTP2: boolean) {
 async function showOSCertificates() {
 	const editor = await openEmptyEditor();
 	await logHeaderInfo(editor);
-	const certs = await readCaCertificates();
+	const certs = await loadSystemCertificates();
 	await logCertificates(editor, `Certificates loaded from the OS (${osCertificateLocation()}):`, certs!);
 }
 
@@ -158,8 +131,8 @@ async function lookupHosts(editor: vscode.TextEditor, url: string) {
 		await appendText(editor, `- ipv${family}: `);
 		const start = Date.now();
 		try {
-			const dnsResult = await Promise.race([dnsLookup(host, { family }), delay(timeoutSeconds * 1000)]);
-			if (dnsResult) {
+			const dnsResult = await Promise.race([dnsLookup(host, { family }), timeout(timeoutSeconds * 1000)]);
+			if (dnsResult !== 'timeout') {
 				await appendText(editor, `${dnsResult.address} (${Date.now() - start} ms)\n`);
 			} else {
 				await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
@@ -172,19 +145,76 @@ async function lookupHosts(editor: vscode.TextEditor, url: string) {
 }
 
 async function probeUrl(editor: vscode.TextEditor, url: string, useHTTP2: boolean) {
+	await probeProxy(editor, url);
 	await probeUrlWithNodeModules(editor, url, true, useHTTP2);
 	await probeUrlWithFetch(editor, url);
+}
+
+async function probeProxy(editor: vscode.TextEditor, url: string) {
+	const timeoutSeconds = 10;
+	let probeProxyURL: string | undefined;
+	if ((proxyAgent as any)?.resolveProxyURL) {
+		await appendText(editor, `Proxy:\n`);
+		await appendText(editor, `- URL: `);
+		const start = Date.now();
+		try {
+			const proxyURL = await Promise.race([(proxyAgent as any).resolveProxyURL(url), timeout(timeoutSeconds * 1000)]);
+			if (proxyURL === 'timeout') {
+				await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
+			} else {
+				await appendText(editor, `${proxyURL || 'None'} (${Date.now() - start} ms)\n`);
+				probeProxyURL = proxyURL;
+			}
+		} catch (err) {
+			await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
+		}
+	}
+	if (proxyAgent?.loadSystemCertificates && probeProxyURL?.startsWith('https:')) {
+		const tlsOrig: typeof tls | undefined = (tls as any).__vscodeOriginal;
+		if (tlsOrig) {
+			await appendText(editor, `- TLS: `);
+			const osCertificates = await loadSystemCertificates();
+			if (!osCertificates) {
+				await appendText(editor, `(failed to load system certificates) `);
+			}
+			const start = Date.now();
+			try {
+				const result = await Promise.race([tlsConnect(tlsOrig, probeProxyURL, [...tls.rootCertificates, ...(osCertificates || [])]), timeout(timeoutSeconds * 1000)]);
+				if (result !== 'timeout') {
+					await appendText(editor, `${result} (${Date.now() - start} ms)\n`);
+				} else {
+					await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
+				}
+			} catch (err) {
+				await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
+			}
+		}
+	}
+	if (probeProxyURL) {
+		const httpx: typeof https | typeof http | undefined = probeProxyURL.startsWith('https:') ? (https as any).__vscodeOriginal : (http as any).__vscodeOriginal;
+		if (httpx) {
+			await appendText(editor, `- Connection: `);
+			const start = Date.now();
+			try {
+				const result = await Promise.race([proxyConnect(httpx, probeProxyURL, url), timeout(timeoutSeconds * 1000)]);
+				if (result !== 'timeout') {
+					await appendText(editor, `${result} (${Date.now() - start} ms)\n`);
+				} else {
+					await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
+				}
+			} catch (err) {
+				await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
+			}
+		}
+	}
+	if ((proxyAgent as any)?.resolveProxyURL) {
+		await appendText(editor, `\n`);
+	}
 }
 
 async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean, useHTTP2: boolean) {
 	await appendText(editor, `Sending${useHTTP2 ? ' HTTP2' : ''} GET request to ${url}${rejectUnauthorized ? '' : ' (allowing unauthorized)'}...\n`);
 	try {
-		proxyLookupResponse = async (requestedUrl, response) => {
-			if (requestedUrl === url || requestedUrl === url + '/') {
-				proxyLookupResponse = undefined;
-				await appendText(editor, `vscode-proxy-agent: ${response}\n`);
-			}
-		};
 		const res = useHTTP2 ? await http2Get(url, rejectUnauthorized) : await httpGet(url, rejectUnauthorized);
 		const cert = res.socket instanceof tls.TLSSocket ? (res.socket as tls.TLSSocket).getPeerCertificate(true) : undefined;
 		await appendText(editor, `Received response:\n`);
@@ -250,8 +280,6 @@ async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, r
 			await appendText(editor, `Retrying while ignoring certificate issues to collect information on the certificate chain.\n\n`);
 			await probeUrlWithNodeModules(editor, url, false, useHTTP2);
 		}
-	} finally {
-		proxyLookupResponse = undefined;
 	}
 }
 
@@ -305,7 +333,7 @@ function getNodeFetchWithH2(): typeof globalThis.fetch {
 }
 
 async function getAllCaCertificates() {
-	const osCerts = await readCaCertificates();
+	const osCerts = await loadSystemCertificates();
 	const certMap = new Map<string, { from: string[]; pem: string; cert: crypto.X509Certificate; }>();
 	for (const pem of tls.rootCertificates) {
 		const cert = tryParseCertificate(pem);
@@ -425,7 +453,11 @@ async function appendText(editor: vscode.TextEditor, string: string) {
 	});
 }
 
-function requireFromApp(moduleName: string) {
+function timeout(ms: number) {
+	return new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), ms));
+}
+
+function loadVSCodeModule<T>(moduleName: string): T | undefined {
 	const appRoot = vscode.env.appRoot;
 	try {
 		return require(`${appRoot}/node_modules.asar/${moduleName}`);
@@ -437,104 +469,61 @@ function requireFromApp(moduleName: string) {
 	} catch (err) {
 		// Not available.
 	}
-	throw new Error(`Could not load ${moduleName} from ${appRoot}`);
-}
-
-function delay(ms: number) {
-	return new Promise<void>(resolve => setTimeout(resolve, ms));
-}
-
-// From https://github.com/microsoft/vscode-proxy-agent/blob/4410a426f444c1203142c0b72dd09f63650ba1a4/src/index.ts#L401:
-
-async function readCaCertificates() {
-
-	const proxyAgent = requireFromApp('@vscode/proxy-agent');
-	if (proxyAgent.loadSystemCertificates) {
-		const agent: typeof proxyAgentType = proxyAgent;
-		return agent.loadSystemCertificates({ log: console });
-	}
-
-	if (process.platform === 'win32') {
-		return readWindowsCaCertificates();
-	}
-	if (process.platform === 'darwin') {
-		return readMacCaCertificates();
-	}
-	if (process.platform === 'linux') {
-		return readLinuxCaCertificates();
-	}
 	return undefined;
 }
 
-async function readWindowsCaCertificates() {
-	// @ts-ignore Windows only
-	const winCA = (() => {
-		try {
-			return requireFromApp('vscode-windows-ca-certs');
-		} catch {
-			return requireFromApp('@vscode/windows-ca-certs');
-		}
-	})();
-
-	let ders: any[] = [];
-	const store = new winCA.Crypt32();
+async function loadSystemCertificates(): Promise<string[] | undefined> {
 	try {
-		let der: any;
-		while (der = store.next()) {
-			ders.push(der);
-		}
-	} finally {
-		store.done();
+		const certificates = await proxyAgent?.loadSystemCertificates({ log: console });
+		return Array.isArray(certificates) ? certificates : undefined;
+	} catch (err) {
+		console.error(err);
+		return undefined;
 	}
-
-	const certs = new Set(ders.map(derToPem));
-	return Array.from(certs);
 }
 
-async function readMacCaCertificates() {
-	const stdout = await new Promise<string>((resolve, reject) => {
-		const child = cp.spawn('/usr/bin/security', ['find-certificate', '-a', '-p']);
-		const stdout: string[] = [];
-		child.stdout.setEncoding('utf8');
-		child.stdout.on('data', str => stdout.push(str));
-		child.on('error', reject);
-		child.on('exit', code => code ? reject(code) : resolve(stdout.join('')));
+async function tlsConnect(tlsOrig: typeof tls, proxyURL: string, ca: (string | Buffer)[]) {
+	return new Promise<string>((resolve, reject) => {
+		const proxyUrlObj = new URL(proxyURL);
+		const socket = tlsOrig.connect({
+			host: proxyUrlObj.hostname,
+			port: parseInt(proxyUrlObj.port, 10),
+			servername: proxyUrlObj.hostname,
+			ca,
+		}, () => {
+			socket.end();
+			resolve('Succeeded');
+		});
+		socket.on('error', reject);
 	});
-	const certs = new Set(stdout.split(/(?=-----BEGIN CERTIFICATE-----)/g)
-		.filter(pem => !!pem.length));
-	return Array.from(certs);
 }
 
-const linuxCaCertificatePaths = [
-	'/etc/ssl/certs/ca-certificates.crt', // Debian / Ubuntu / Alpine / Fedora
-	'/etc/ssl/certs/ca-bundle.crt', // Fedora
-	'/etc/ssl/ca-bundle.pem', // OpenSUSE
-];
-
-async function readLinuxCaCertificates() {
-	for (const certPath of linuxCaCertificatePaths) {
-		try {
-			const content = await fs.promises.readFile(certPath, { encoding: 'utf8' });
-			const certs = new Set(content.split(/(?=-----BEGIN CERTIFICATE-----)/g)
-				.filter(pem => !!pem.length));
-			return Array.from(certs);
-		} catch (err: any) {
-			if (err?.code !== 'ENOENT') {
-				throw err;
-			}
-		}
-	}
-	return [];
-}
-
-function derToPem(blob: Buffer) {
-	const lines = ['-----BEGIN CERTIFICATE-----'];
-	const der = blob.toString('base64');
-	for (let i = 0; i < der.length; i += 64) {
-		lines.push(der.substr(i, 64));
-	}
-	lines.push('-----END CERTIFICATE-----', '');
-	return lines.join(os.EOL);
+async function proxyConnect(httpx: typeof https | typeof http, proxyUrl: string, targetUrl: string) {
+	return new Promise<string>((resolve, reject) => {
+		const proxyUrlObj = new URL(proxyUrl);
+		const targetUrlObj = new URL(targetUrl);
+		const targetHost = `${targetUrlObj.hostname}:${targetUrlObj.port || (targetUrlObj.protocol === 'https:' ? 443 : 80)}`;
+		const options = {
+			method: 'CONNECT',
+			host: proxyUrlObj.hostname,
+			port: proxyUrlObj.port,
+			path: targetHost,
+			headers: {
+				Host: targetHost,
+			},
+			rejectUnauthorized: false,
+		};
+		const req = httpx.request(options);
+		req.on('connect', (res, socket, head) => {
+			const headers = ['proxy-authenticate', 'proxy-agent', 'server', 'via'].map(header => {
+				return res.headers[header] ? `\n	${header}: ${res.headers[header]}` : undefined;
+			}).filter(Boolean);
+			socket.end();
+			resolve(`${res.statusCode} ${res.statusMessage}${headers.join('')}`);
+		});
+		req.on('error', reject);
+		req.end();
+	});
 }
 
 function isPast(date: string) {
