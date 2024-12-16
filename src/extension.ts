@@ -102,27 +102,27 @@ async function showBuiltInCertificates() {
 }
 
 async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string | { from: string[]; pem: string; cert: crypto.X509Certificate }>) {
-	await appendText(editor, title);
+	await appendText(editor, `${title}\n`);
 	for (const cert of certs) {
 		const current = typeof cert === 'string' ? tryParseCertificate(cert) : cert instanceof crypto.X509Certificate ? cert : cert.cert;
 		if (!(current instanceof crypto.X509Certificate)) {
-			await appendText(editor, `- Certificate parse error: ${(current as any)?.message || String(current)}`);
-			await appendText(editor, `  Input:\n${cert}`);
+			await appendText(editor, `- Certificate parse error: ${(current as any)?.message || String(current)}\n`);
+			await appendText(editor, `  Input:\n${cert}\n`);
 			continue;
 		}
-		// await appendText(editor, `- Raw:\n${typeof cert === 'string' ? cert : cert.pem}`);
-		await appendText(editor, `- Subject: ${current.subject.split('\n').join(' ')}${ typeof cert === 'object' && 'from' in cert ? ` (${cert.from.join(' and ')})` : ''}`);
+		// await appendText(editor, `- Raw:\n${typeof cert === 'string' ? cert : cert.pem}\n`);
+		await appendText(editor, `- Subject: ${current.subject.split('\n').join(' ')}${ typeof cert === 'object' && 'from' in cert ? ` (${cert.from.join(' and ')})` : ''}\n`);
 		if (current.subjectAltName) {
-			await appendText(editor, `  Subject alt: ${current.subjectAltName}`);
+			await appendText(editor, `  Subject alt: ${current.subjectAltName}\n`);
 		}
-		await appendText(editor, `  Validity: ${current.validFrom} - ${current.validTo}${isPast(current.validTo) ? ' (expired)' : ''}`);
-		await appendText(editor, `  Fingerprint: ${current.fingerprint}`);
-		await appendText(editor, `  Issuer: ${current.issuer.split('\n').join(' ')}`);
+		await appendText(editor, `  Validity: ${current.validFrom} - ${current.validTo}${isPast(current.validTo) ? ' (expired)' : ''}\n`);
+		await appendText(editor, `  Fingerprint: ${current.fingerprint}\n`);
+		await appendText(editor, `  Issuer: ${current.issuer.split('\n').join(' ')}\n`);
 		if (current.keyUsage) {
-			await appendText(editor, `  Key usage: ${current.keyUsage.join(', ')}`);
+			await appendText(editor, `  Key usage: ${current.keyUsage.join(', ')}\n`);
 		}
 		if (!current.ca) {
-			await appendText(editor, `  Not a CA`);
+			await appendText(editor, `  Not a CA\n`);
 		}
 	}
 }
@@ -133,42 +133,42 @@ async function openEmptyEditor() {
 }
 
 async function logHeaderInfo(editor: vscode.TextEditor) {
-	await appendText(editor, `Note: Make sure to replace all sensitive information with dummy values before sharing this output.\n`);
+	await appendText(editor, `Note: Make sure to replace all sensitive information with dummy values before sharing this output.\n\n`);
 	await logRuntimeInfo(editor);
 }
 
 async function logRuntimeInfo(editor: vscode.TextEditor) {
 	const pkg = require('../package.json');
 	const product = require(path.join(vscode.env.appRoot, 'product.json'));
-	await appendText(editor, `VS Code ${vscode.version} (${product.commit || 'out-of-source'})`);
-	await appendText(editor, `${pkg.displayName} ${pkg.version}`);
-	await appendText(editor, `${os.platform()} ${os.release()} ${os.arch()}`);
+	await appendText(editor, `VS Code ${vscode.version} (${product.commit || 'out-of-source'})\n`);
+	await appendText(editor, `${pkg.displayName} ${pkg.version}\n`);
+	await appendText(editor, `${os.platform()} ${os.release()} ${os.arch()}\n`);
 	if (vscode.env.remoteName) {
-		await appendText(editor, `Remote: ${vscode.env.remoteName}`);
+		await appendText(editor, `Remote: ${vscode.env.remoteName}\n`);
 	}
-	await appendText(editor, ``);
+	await appendText(editor, `\n`);
 }
 
 async function lookupHosts(editor: vscode.TextEditor, url: string) {
 	const host = new URL(url).hostname;
 	const timeoutSeconds = 10;
 	const dnsLookup = util.promisify(dns.lookup);
-	await appendText(editor, `DNS Lookup:`);
+	await appendText(editor, `DNS Lookup:\n`);
 	for (const family of [4, 6]) {
-		await appendText(editor, `- ipv${family}: `, false);
+		await appendText(editor, `- ipv${family}: `);
 		const start = Date.now();
 		try {
 			const dnsResult = await Promise.race([dnsLookup(host, { family }), delay(timeoutSeconds * 1000)]);
 			if (dnsResult) {
-				await appendText(editor, `${dnsResult.address} (${Date.now() - start} ms)`);
+				await appendText(editor, `${dnsResult.address} (${Date.now() - start} ms)\n`);
 			} else {
-				await appendText(editor, `timed out after ${timeoutSeconds} seconds`);
+				await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
 			}
 		} catch (err: any) {
-			await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}`);
+			await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
 		}
 	}
-	await appendText(editor, '');
+	await appendText(editor, '\n');
 }
 
 async function probeUrl(editor: vscode.TextEditor, url: string, useHTTP2: boolean) {
@@ -177,49 +177,49 @@ async function probeUrl(editor: vscode.TextEditor, url: string, useHTTP2: boolea
 }
 
 async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean, useHTTP2: boolean) {
-	await appendText(editor, `Sending${useHTTP2 ? ' HTTP2' : ''} GET request to ${url}${rejectUnauthorized ? '' : ' (allowing unauthorized)'}...`);
+	await appendText(editor, `Sending${useHTTP2 ? ' HTTP2' : ''} GET request to ${url}${rejectUnauthorized ? '' : ' (allowing unauthorized)'}...\n`);
 	try {
 		proxyLookupResponse = async (requestedUrl, response) => {
 			if (requestedUrl === url || requestedUrl === url + '/') {
 				proxyLookupResponse = undefined;
-				await appendText(editor, `vscode-proxy-agent: ${response}`);
+				await appendText(editor, `vscode-proxy-agent: ${response}\n`);
 			}
 		};
 		const res = useHTTP2 ? await http2Get(url, rejectUnauthorized) : await httpGet(url, rejectUnauthorized);
 		const cert = res.socket instanceof tls.TLSSocket ? (res.socket as tls.TLSSocket).getPeerCertificate(true) : undefined;
-		await appendText(editor, `Received response:`);
-		await appendText(editor, `- Status: ${res.statusCode} ${res.statusMessage}`);
+		await appendText(editor, `Received response:\n`);
+		await appendText(editor, `- Status: ${res.statusCode} ${res.statusMessage}\n`);
 		if (res.headers.location) {
-			await appendText(editor, `- Location: ${res.headers.location}`);
+			await appendText(editor, `- Location: ${res.headers.location}\n`);
 		}
 		if (res.statusCode === 407) {
-			await appendText(editor, `- Proxy-Authenticate: ${res.headers['proxy-authenticate']}`);
+			await appendText(editor, `- Proxy-Authenticate: ${res.headers['proxy-authenticate']}\n`);
 		}
 		if (cert) {
-			await appendText(editor, `Certificate chain:`);
+			await appendText(editor, `Certificate chain:\n`);
 			let hasExpired = false;
 			let current = cert;
 			const seen = new Set<string>();
 			while (!seen.has(current.fingerprint)) {
 				seen.add(current.fingerprint);
-				await appendText(editor, `- Subject: ${current.subject?.CN}${current.subject?.O ? ` (${current.subject.O})` : ''}`); // Subject can be undefined? https://github.com/microsoft/vscode-remote-release/issues/9212#issuecomment-1851917503
+				await appendText(editor, `- Subject: ${current.subject?.CN}${current.subject?.O ? ` (${current.subject.O})` : ''}\n`); // Subject can be undefined? https://github.com/microsoft/vscode-remote-release/issues/9212#issuecomment-1851917503
 				if (current.subjectaltname) {
-					await appendText(editor, `  Subject alt: ${current.subjectaltname}`);
+					await appendText(editor, `  Subject alt: ${current.subjectaltname}\n`);
 				}
 				const expired = isPast(current.valid_to);
 				hasExpired = hasExpired || expired;
-				await appendText(editor, `  Validity: ${current.valid_from} - ${current.valid_to}${expired ? ' (expired)' : ''}`);
-				await appendText(editor, `  Fingerprint: ${current.fingerprint}`);
+				await appendText(editor, `  Validity: ${current.valid_from} - ${current.valid_to}${expired ? ' (expired)' : ''}\n`);
+				await appendText(editor, `  Fingerprint: ${current.fingerprint}\n`);
 				if (current.issuerCertificate) {
 					if (current.issuerCertificate.fingerprint512 === current.fingerprint512) {
-						await appendText(editor, `  Self-signed`);
+						await appendText(editor, `  Self-signed\n`);
 					}
 					current = current.issuerCertificate;
 				} else {
-					await appendText(editor, `  Issuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not in certificate chain of the server.`);
+					await appendText(editor, `  Issuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not in certificate chain of the server.\n`);
 				}
 			}
-			// await appendText(editor, `  Raw:\n${derToPem(cert.raw)}`);
+			// await appendText(editor, `  Raw:\n${derToPem(cert.raw)}\n`);
 			const uniqCerts = await getAllCaCertificates();
 			const toVerify = new crypto.X509Certificate(current.raw);
 			const toVerifyPublicKey = toVerify.publicKey.export({ type: 'spki', format: 'der' });
@@ -231,23 +231,23 @@ async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, r
 				hasExpired = hasExpired || allRootsExpired;
 			} else {
 				// https://github.com/microsoft/vscode/issues/177139#issuecomment-1497180563
-				await appendText(editor, `\nLast certificate not verified by OS root certificates. This might indicate an issue with the root certificates registered in your OS:`);
-				await appendText(editor, `- Make sure that the root certificate for the certificate chain is registered as such in the OS. Use \`F1\` > \`Network Proxy Test: Show OS Certificates\` to see the list loaded by VS Code.`);
-				await appendText(editor, `- Also make sure that your proxy and server return the complete certificate chain (except possibly for the root certificate).`);
+				await appendText(editor, `\nLast certificate not verified by OS root certificates. This might indicate an issue with the root certificates registered in your OS:\n`);
+				await appendText(editor, `- Make sure that the root certificate for the certificate chain is registered as such in the OS. Use \`F1\` > \`Network Proxy Test: Show OS Certificates\` to see the list loaded by VS Code.\n`);
+				await appendText(editor, `- Also make sure that your proxy and server return the complete certificate chain (except possibly for the root certificate).\n`);
 			}
 			if (hasExpired) {
 				// https://github.com/microsoft/vscode-remote-release/issues/8207
-				await appendText(editor, `\nOne or more certificates have expired. Update the expired certificates in the server's response and in your OS' certificate store (${osCertificateLocation()}).`);
+				await appendText(editor, `\nOne or more certificates have expired. Update the expired certificates in the server's response and in your OS' certificate store (${osCertificateLocation()}).\n`);
 			}
 		}
 		if (res.statusCode === 407) {
 			// https://github.com/microsoft/vscode/issues/179450#issuecomment-1503397566
-			await appendText(editor, `\nAuthentication with the proxy server failed. Proxy authentication isn't well supported yet. You could try setting the HTTP Proxy in VS Code's user settings to \`<http|https>://<username>:<password>@<proxy-server>\`. (\`F1\` > \`Preferences: Open User Settings\` > \`HTTP Proxy\`)`);
+			await appendText(editor, `\nAuthentication with the proxy server failed. Proxy authentication isn't well supported yet. You could try setting the HTTP Proxy in VS Code's user settings to \`<http|https>://<username>:<password>@<proxy-server>\`. (\`F1\` > \`Preferences: Open User Settings\` > \`HTTP Proxy\`)\n`);
 		}
 	} catch (err) {
-		await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}`);
+		await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}\n`);
 		if (rejectUnauthorized && url.startsWith('https:')) {
-			await appendText(editor, `Retrying while ignoring certificate issues to collect information on the certificate chain.\n`);
+			await appendText(editor, `Retrying while ignoring certificate issues to collect information on the certificate chain.\n\n`);
 			await probeUrlWithNodeModules(editor, url, false, useHTTP2);
 		}
 	} finally {
@@ -271,19 +271,19 @@ async function probeUrlWithFetch(editor: vscode.TextEditor, url: string) {
 		},
 	].filter(({ impl }) => !!impl);
 	for (const { label, impl } of fetchImpls) {
-		await appendText(editor, `\nSending GET request to ${url} using fetch from ${label}...`);
+		await appendText(editor, `\nSending GET request to ${url} using fetch from ${label}...\n`);
 		try {
 			const res = await impl!(url, { redirect: 'manual' });
-			await appendText(editor, `Received response:`);
-			await appendText(editor, `- Status: ${res.status} ${res.statusText}`);
+			await appendText(editor, `Received response:\n`);
+			await appendText(editor, `- Status: ${res.status} ${res.statusText}\n`);
 			if (res.headers.has('location')) {
-				await appendText(editor, `- Location: ${res.headers.get('location')}`);
+				await appendText(editor, `- Location: ${res.headers.get('location')}\n`);
 			}
 			if (res.status === 407) {
-				await appendText(editor, `- Proxy-Authenticate: ${res.headers.get('proxy-authenticate')}`);
+				await appendText(editor, `- Proxy-Authenticate: ${res.headers.get('proxy-authenticate')}\n`);
 			}
 		} catch (err) {
-			await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}`);
+			await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}\n`);
 		}
 	}
 }
@@ -391,14 +391,14 @@ async function logSettings(editor: vscode.TextEditor) {
 		return { id, obj, keys };
 	}).filter(({ keys }) => keys.length);
 	if (settings.length) {
-		await appendText(editor, 'Settings:');
+		await appendText(editor, 'Settings:\n');
 		for (const { id, obj, keys } of settings) {
-			await appendText(editor, `- ${id}: ${conf.get<string>(id)}`);
+			await appendText(editor, `- ${id}: ${conf.get<string>(id)}\n`);
 			for (const key of keys) {
-				await appendText(editor, `  - ${key}: ${(obj as any)[key]}`);
+				await appendText(editor, `  - ${key}: ${(obj as any)[key]}\n`);
 			}
 		}
-		await appendText(editor, '');
+		await appendText(editor, '\n');
 	}
 }
 
@@ -411,17 +411,17 @@ async function logEnvVariables(editor: vscode.TextEditor) {
 		}
 	}
 	if (setEnvVars.length) {
-		await appendText(editor, 'Environment variables:');
+		await appendText(editor, 'Environment variables:\n');
 		for (const env of setEnvVars) {
-			await appendText(editor, `${env}=${process.env[env]}`);
+			await appendText(editor, `${env}=${process.env[env]}\n`);
 		}
-		await appendText(editor, '');
+		await appendText(editor, '\n');
 	}
 }
 
-async function appendText(editor: vscode.TextEditor, string: string, appendEOL = true) {
+async function appendText(editor: vscode.TextEditor, string: string) {
 	await editor.edit(builder => {
-		builder.insert(editor.document.lineAt(editor.document.lineCount - 1).range.end, appendEOL ? string + '\n' : string);
+		builder.insert(editor.document.lineAt(editor.document.lineCount - 1).range.end, string);
 	});
 }
 
