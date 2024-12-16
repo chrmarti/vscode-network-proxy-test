@@ -72,7 +72,7 @@ async function testConnection(useHTTP2: boolean) {
 	await logSettings(editor);
 	await logEnvVariables(editor);
 	await lookupHosts(editor, url);
-	await probeUrl(editor, url, true, useHTTP2);
+	await probeUrl(editor, url, useHTTP2);
 }
 
 async function showOSCertificates() {
@@ -171,7 +171,12 @@ async function lookupHosts(editor: vscode.TextEditor, url: string) {
 	await appendText(editor, '');
 }
 
-async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean, useHTTP2: boolean) {
+async function probeUrl(editor: vscode.TextEditor, url: string, useHTTP2: boolean) {
+	await probeUrlWithNodeModules(editor, url, true, useHTTP2);
+	await probeUrlWithFetch(editor, url);
+}
+
+async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, rejectUnauthorized: boolean, useHTTP2: boolean) {
 	await appendText(editor, `Sending${useHTTP2 ? ' HTTP2' : ''} GET request to ${url}${rejectUnauthorized ? '' : ' (allowing unauthorized)'}...`);
 	try {
 		proxyLookupResponse = async (requestedUrl, response) => {
@@ -243,12 +248,14 @@ async function probeUrl(editor: vscode.TextEditor, url: string, rejectUnauthoriz
 		await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}`);
 		if (rejectUnauthorized && url.startsWith('https:')) {
 			await appendText(editor, `Retrying while ignoring certificate issues to collect information on the certificate chain.\n`);
-			await probeUrl(editor, url, false, useHTTP2);
+			await probeUrlWithNodeModules(editor, url, false, useHTTP2);
 		}
 	} finally {
 		proxyLookupResponse = undefined;
 	}
+}
 
+async function probeUrlWithFetch(editor: vscode.TextEditor, url: string) {
 	const fetchImpls: { label: string; impl: typeof fetch | undefined }[] = [
 		{
 			label: 'Electron',
