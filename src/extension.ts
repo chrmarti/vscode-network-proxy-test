@@ -126,9 +126,11 @@ async function lookupHosts(editor: vscode.TextEditor, url: string) {
 	const host = new URL(url).hostname;
 	const timeoutSeconds = 10;
 	const dnsLookup = util.promisify(dns.lookup);
-	await appendText(editor, `DNS Lookup:\n`);
+	await appendText(editor, `DNS:\n`);
+	await appendText(editor, `- Servers: ${dns.getServers().join(', ')}\n`);
+	await appendText(editor, `- Default Result Order: ${dns.getDefaultResultOrder()}\n`);
 	for (const family of [4, 6]) {
-		await appendText(editor, `- ipv${family}: `);
+		await appendText(editor, `- IPv${family} Lookup: `);
 		const start = Date.now();
 		try {
 			const dnsResult = await Promise.race([dnsLookup(host, { family }), timeout(timeoutSeconds * 1000)]);
