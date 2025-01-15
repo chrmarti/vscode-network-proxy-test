@@ -128,20 +128,20 @@ async function lookupHosts(editor: vscode.TextEditor, url: string) {
 	const dnsLookup = util.promisify(dns.lookup);
 	await appendText(editor, `DNS:\n`);
 	await appendText(editor, `- Servers: ${dns.getServers().join(', ')}\n`);
-	await appendText(editor, `- Default Result Order: ${dns.getDefaultResultOrder()}\n`);
-	for (const family of [4, 6]) {
-		await appendText(editor, `- IPv${family} Lookup: `);
-		const start = Date.now();
-		try {
-			const dnsResult = await Promise.race([dnsLookup(host, { family }), timeout(timeoutSeconds * 1000)]);
-			if (dnsResult !== 'timeout') {
-				await appendText(editor, `${dnsResult.address} (${Date.now() - start} ms)\n`);
-			} else {
-				await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
-			}
-		} catch (err: any) {
-			await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
+	await appendText(editor, `- Result Order: ${dns.getDefaultResultOrder()}\n`);
+	await appendText(editor, `- Auto Select Family: ${net.getDefaultAutoSelectFamily()}\n`);
+	await appendText(editor, `- Auto Select Family Attempt Timeout: ${net.getDefaultAutoSelectFamilyAttemptTimeout()}\n`);
+	await appendText(editor, `- Lookup: `);
+	const start = Date.now();
+	try {
+		const dnsResult = await Promise.race([dnsLookup(host, { all: true }), timeout(timeoutSeconds * 1000)]);
+		if (dnsResult !== 'timeout') {
+			await appendText(editor, `${dnsResult.map(({ address }) => address).join(', ')} (${Date.now() - start} ms)\n`);
+		} else {
+			await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
 		}
+	} catch (err: any) {
+		await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
 	}
 	await appendText(editor, '\n');
 }
