@@ -117,6 +117,10 @@ async function logRuntimeInfo(editor: vscode.TextEditor) {
 	await appendText(editor, `${pkg.displayName} ${pkg.version}\n`);
 	await appendText(editor, `${os.platform()} ${os.release()} ${os.arch()}\n`);
 	if (vscode.env.remoteName) {
+		const ext = vscode.extensions.getExtension(`${pkg.publisher}.${pkg.name}`);
+		if (ext) {
+			await appendText(editor, `Extension: ${vscode.ExtensionKind[ext.extensionKind]}\n`);
+		}
 		await appendText(editor, `Remote: ${vscode.env.remoteName}\n`);
 	}
 	await appendText(editor, `\n`);
