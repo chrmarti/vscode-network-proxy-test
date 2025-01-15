@@ -145,7 +145,7 @@ async function lookupHosts(editor: vscode.TextEditor, url: string) {
 			await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
 		}
 	} catch (err: any) {
-		await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
+		await appendText(editor, `Error (${Date.now() - start} ms): ${collectErrorMessages(err)}\n`);
 	}
 	await appendText(editor, '\n');
 }
@@ -172,7 +172,7 @@ async function probeProxy(editor: vscode.TextEditor, url: string) {
 				probeProxyURL = proxyURL;
 			}
 		} catch (err) {
-			await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
+			await appendText(editor, `Error (${Date.now() - start} ms): ${collectErrorMessages(err)}\n`);
 		}
 	}
 	if (proxyAgent?.loadSystemCertificates && probeProxyURL?.startsWith('https:')) {
@@ -192,7 +192,7 @@ async function probeProxy(editor: vscode.TextEditor, url: string) {
 					await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
 				}
 			} catch (err) {
-				await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
+				await appendText(editor, `Error (${Date.now() - start} ms): ${collectErrorMessages(err)}\n`);
 			}
 		}
 	}
@@ -209,7 +209,7 @@ async function probeProxy(editor: vscode.TextEditor, url: string) {
 					await appendText(editor, `timed out after ${timeoutSeconds} seconds\n`);
 				}
 			} catch (err) {
-				await appendText(editor, `Error (${Date.now() - start} ms): ${err?.message}\n`);
+				await appendText(editor, `Error (${Date.now() - start} ms): ${collectErrorMessages(err)}\n`);
 			}
 		}
 	}
@@ -281,7 +281,7 @@ async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, r
 			await appendText(editor, `\nAuthentication with the proxy server failed. Proxy authentication isn't well supported yet. You could try setting the HTTP Proxy in VS Code's user settings to \`<http|https>://<username>:<password>@<proxy-server>\`. (\`F1\` > \`Preferences: Open User Settings\` > \`HTTP Proxy\`)\n`);
 		}
 	} catch (err) {
-		await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}\n`);
+		await appendText(editor, `Received error: ${collectErrorMessages(err)}\n`);
 		if (rejectUnauthorized && url.startsWith('https:')) {
 			await appendText(editor, `Retrying while ignoring certificate issues to collect information on the certificate chain.\n\n`);
 			await probeUrlWithNodeModules(editor, url, false, useHTTP2);
@@ -317,9 +317,28 @@ async function probeUrlWithFetch(editor: vscode.TextEditor, url: string) {
 				await appendText(editor, `- Proxy-Authenticate: ${res.headers.get('proxy-authenticate')}\n`);
 			}
 		} catch (err) {
-			await appendText(editor, `Received error: ${(err as any)?.message}${(err as any)?.code ? ` (${(err as any).code})` : ''}\n`);
+			await appendText(editor, `Received error: ${collectErrorMessages(err)}\n`);
 		}
 	}
+}
+
+function collectErrorMessages(e: any): string {
+	// Collect error messages from nested errors as seen with Node's `fetch`.
+	const seen = new Set<any>();
+	function collect(e: any, indent: string): string {
+		if (!e || typeof e !== 'object' || seen.has(e)) {
+			return '';
+		}
+		seen.add(e);
+		const message = e.message || e.code || e.toString?.() || '';
+		return [
+			message ? `${indent}${message}\n` : '',
+			collect(e.cause, indent + '  '),
+			...(Array.isArray(e.errors) ? e.errors.map((e: any) => collect(e, indent + '  ')) : []),
+		].join('');
+	}
+	return collect(e, '')
+		.trim();
 }
 
 function loadElectronFetch(): typeof fetch | undefined {
