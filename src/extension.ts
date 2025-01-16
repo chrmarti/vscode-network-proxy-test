@@ -433,6 +433,7 @@ const networkSettingsIds = [
 	'http.proxyKerberosServicePrincipal',
 	'http.systemCertificates',
 	'http.experimental.systemCertificatesV2',
+	'http.useLocalProxyConfiguration',
 ];
 
 async function logSettings(editor: vscode.TextEditor) {
