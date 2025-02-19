@@ -330,9 +330,10 @@ function collectErrorMessages(e: any): string {
 			return '';
 		}
 		seen.add(e);
-		const message = e.message || e.code || e.toString?.() || '';
+		const message = e.stack || e.message || e.code || e.toString?.() || '';
+		const messageStr = message.toString?.() as (string | undefined) || '';
 		return [
-			message ? `${indent}${message}\n` : '',
+			messageStr ? `${messageStr.split('\n').map(line => `${indent}${line}`).join('\n')}\n` : '',
 			collect(e.cause, indent + '  '),
 			...(Array.isArray(e.errors) ? e.errors.map((e: any) => collect(e, indent + '  ')) : []),
 		].join('');
