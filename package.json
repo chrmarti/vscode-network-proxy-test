@@ -52,15 +52,15 @@
 		"lint": "eslint src --ext ts"
 	},
 	"dependencies": {
-		"undici": "^6.20.1"
+		"undici": "^7.16.0"
 	},
 	"devDependencies": {
-		"@types/node": "^20.14.10",
+		"@stylistic/eslint-plugin": "^5.5.0",
+		"@types/node": "^24.9.1",
 		"@types/vscode": "^1.96.0",
-		"@typescript-eslint/eslint-plugin": "^5.57.0",
-		"@typescript-eslint/parser": "^5.57.0",
-		"@vscode/vsce": "^3.3.2",
-		"eslint": "^8.37.0",
-		"typescript": "^5.0.3"
+		"@typescript-eslint/parser": "^8.46.2",
+		"@vscode/vsce": "^3.6.2",
+		"eslint": "^9.38.0",
+		"typescript": "^5.9.3"
 	}
 }
