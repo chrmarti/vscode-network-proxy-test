@@ -85,6 +85,7 @@ async function logCertificates(editor: vscode.TextEditor, title: string, certs: 
 		}
 		// await appendText(editor, `- Raw:\n${typeof cert === 'string' ? cert : cert.pem}\n`);
 		await appendText(editor, `- Subject: ${current.subject.split('\n').join(' ')}${ typeof cert === 'object' && 'from' in cert ? ` (${cert.from.join(' and ')})` : ''}\n`);
+		await appendText(editor, `  Public Key Hash: ${publicKeyHash(current)}\n`);
 		if (current.subjectAltName) {
 			await appendText(editor, `  Subject alt: ${current.subjectAltName}\n`);
 		}
@@ -242,6 +243,7 @@ async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, r
 				if (current.subjectaltname) {
 					await appendText(editor, `  Subject alt: ${current.subjectaltname}\n`);
 				}
+				await appendText(editor, `  Public Key Hash: ${publicKeyHash(current)}\n`);
 				const expired = isPast(current.valid_to);
 				hasExpired = hasExpired || expired;
 				await appendText(editor, `  Validity: ${current.valid_from} - ${current.valid_to}${expired ? ' (expired)' : ''}\n`);
@@ -556,4 +558,17 @@ async function proxyConnect(httpx: typeof https | typeof http, proxyUrl: string,
 function isPast(date: string) {
 	const parsed = Date.parse(date);
 	return !isNaN(parsed) && parsed < Date.now();
+}
+
+function publicKeyHash(current: crypto.X509Certificate | tls.DetailedPeerCertificate) {
+	let publicKey: Buffer;
+	if (current instanceof crypto.X509Certificate) {
+		publicKey = current.publicKey.export({ type: 'spki', format: 'der' });
+	} else if (current.pubkey) {
+		publicKey = current.pubkey;
+	} else {
+		return 'Public key not available';
+	}
+	const publicKeyHash = crypto.createHash('sha256').update(publicKey).digest('hex');
+	return publicKeyHash.toUpperCase().replace(/(.{2})/g, '$1:').slice(0, -1);
 }
