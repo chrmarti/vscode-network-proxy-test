@@ -125,6 +125,10 @@ async function logRuntimeInfo(editor: vscode.TextEditor) {
 		await appendText(editor, `Remote: ${vscode.env.remoteName}\n`);
 	}
 	await appendText(editor, `\n`);
+	await appendText(editor, `Built-in certificates: ${tls.rootCertificates.length}\n`);
+	const osCerts = await loadSystemCertificates();
+	await appendText(editor, `OS certificates: ${osCerts ? osCerts.length : 'Failed to load'}\n`);
+	await appendText(editor, `\n`);
 }
 
 async function lookupHosts(editor: vscode.TextEditor, url: string) {
