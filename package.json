@@ -3,7 +3,7 @@
 	"displayName": "Network Proxy Test",
 	"license": "MIT",
 	"publisher": "chrmarti",
-	"version": "0.0.17",
+	"version": "0.0.18",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/chrmarti/vscode-network-proxy-test.git"
