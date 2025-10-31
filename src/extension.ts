@@ -233,9 +233,11 @@ async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, r
 			await appendText(editor, `- Proxy-Authenticate: ${res.headers['proxy-authenticate']}\n`);
 		}
 		if (cert) {
+			const uniqCerts = await getAllCaCertificates();
 			await appendText(editor, `Certificate chain:\n`);
 			let hasExpired = false;
 			let current = cert;
+			const allLocalRoots: typeof uniqCerts = [];
 			const seen = new Set<string>();
 			while (!seen.has(current.fingerprint)) {
 				seen.add(current.fingerprint);
@@ -248,6 +250,21 @@ async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, r
 				hasExpired = hasExpired || expired;
 				await appendText(editor, `  Validity: ${current.valid_from} - ${current.valid_to}${expired ? ' (expired)' : ''}\n`);
 				await appendText(editor, `  Fingerprint: ${current.fingerprint}\n`);
+
+				const toVerify = new crypto.X509Certificate(current.raw);
+				const toVerifyPublicKey = toVerify.publicKey.export({ type: 'spki', format: 'der' });
+				const localRoots = uniqCerts.filter(({ cert }) => cert.publicKey.export({ type: 'spki', format: 'der' }).equals(toVerifyPublicKey) || toVerify.checkIssued(cert));
+				if (localRoots.length) {
+					const localRootsUnexpired = localRoots.filter(({ cert }) => !isPast(cert.validTo));
+					const allRootsExpired = !localRootsUnexpired.length;
+					hasExpired = hasExpired || allRootsExpired;
+					for (const localRoot of localRoots) {
+						if (!allLocalRoots.includes(localRoot)) {
+							allLocalRoots.push(localRoot);
+						}
+					}
+				}
+
 				if (current.issuerCertificate) {
 					if (current.issuerCertificate.fingerprint512 === current.fingerprint512) {
 						await appendText(editor, `  Self-signed\n`);
@@ -257,19 +274,12 @@ async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, r
 					await appendText(editor, `  Issuer certificate '${current.issuer.CN}${current.issuer.O ? ` (${current.issuer.O})` : ''}' not in certificate chain of the server.\n`);
 				}
 			}
-			// await appendText(editor, `  Raw:\n${derToPem(cert.raw)}\n`);
-			const uniqCerts = await getAllCaCertificates();
-			const toVerify = new crypto.X509Certificate(current.raw);
-			const toVerifyPublicKey = toVerify.publicKey.export({ type: 'spki', format: 'der' });
-			const localRoots = uniqCerts.filter(({ cert }) => cert.publicKey.export({ type: 'spki', format: 'der' }).equals(toVerifyPublicKey) || toVerify.checkIssued(cert));
-			if (localRoots.length) {
-				const localRootsUnexpired = localRoots.filter(({ cert }) => !isPast(cert.validTo));
-				const allRootsExpired = !localRootsUnexpired.length;
-				await logCertificates(editor, `Local root certificates:`, localRoots);
-				hasExpired = hasExpired || allRootsExpired;
+
+			if (allLocalRoots.length) {
+				await logCertificates(editor, `Local root certificates:`, allLocalRoots);
 			} else {
 				// https://github.com/microsoft/vscode/issues/177139#issuecomment-1497180563
-				await appendText(editor, `\nLast certificate not verified by OS root certificates. This might indicate an issue with the root certificates registered in your OS:\n`);
+				await appendText(editor, `\nNone of the certificates returned by the server are verified by OS root certificates. This might indicate an issue with the root certificates registered in your OS:\n`);
 				await appendText(editor, `- Make sure that the root certificate for the certificate chain is registered as such in the OS. Use \`F1\` > \`Network Proxy Test: Show OS Certificates\` to see the list loaded by VS Code.\n`);
 				await appendText(editor, `- Also make sure that your proxy and server return the complete certificate chain (except possibly for the root certificate).\n`);
 			}
