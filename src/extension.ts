@@ -28,6 +28,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.test-connection-http2', () => testConnection(true)));
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.show-os-certificates', () => showOSCertificates()));
 	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.show-builtin-certificates', () => showBuiltInCertificates()));
+	context.subscriptions.push(vscode.commands.registerCommand('network-proxy-test.compare-system-certificates', () => compareSystemCertificates()));
 }
 
 async function testConnection(useHTTP2: boolean) {
@@ -72,6 +73,69 @@ async function showBuiltInCertificates() {
 	const editor = await openEmptyEditor();
 	await logHeaderInfo(editor);
 	await logCertificates(editor, 'Certificates built-in with Node.js:', tls.rootCertificates);
+}
+
+async function compareSystemCertificates() {
+	const editor = await openEmptyEditor();
+	await logHeaderInfo(editor);
+
+	// Get certificates from both sources
+	const tlsSystemCerts = tls.getCACertificates?.('system') || [];
+	const loadedSystemCerts = await loadSystemCertificates() || [];
+
+	await appendText(editor, `Comparing system certificates loaded by:\n`);
+	await appendText(editor, `- Node.js: ${tlsSystemCerts.length} certificates\n`);
+	await appendText(editor, `- @vscode/proxy-agent: ${loadedSystemCerts.length} certificates\n\n`);
+
+	// Parse all certificates and create maps
+	const tlsMap = new Map<string, crypto.X509Certificate>();
+	const loadedMap = new Map<string, crypto.X509Certificate>();
+
+	for (const pem of tlsSystemCerts) {
+		const cert = tryParseCertificate(pem);
+		if (cert instanceof crypto.X509Certificate) {
+			tlsMap.set(cert.fingerprint512, cert);
+		}
+	}
+
+	for (const pem of loadedSystemCerts) {
+		const cert = tryParseCertificate(pem);
+		if (cert instanceof crypto.X509Certificate) {
+			loadedMap.set(cert.fingerprint512, cert);
+		}
+	}
+
+	// Find certificates only in tls.getCACertificates
+	const onlyInTls: crypto.X509Certificate[] = [];
+	for (const [fingerprint, cert] of tlsMap) {
+		if (!loadedMap.has(fingerprint)) {
+			onlyInTls.push(cert);
+		}
+	}
+
+	// Find certificates only in loadSystemCertificates
+	const onlyInLoaded: crypto.X509Certificate[] = [];
+	for (const [fingerprint, cert] of loadedMap) {
+		if (!tlsMap.has(fingerprint)) {
+			onlyInLoaded.push(cert);
+		}
+	}
+
+	// Find common certificates
+	const common = tlsMap.size - onlyInTls.length;
+
+	await appendText(editor, `Common certificates: ${common}\n`);
+	await appendText(editor, `Only in Node.js: ${onlyInTls.length}\n`);
+	await appendText(editor, `Only in @vscode/proxy-agent: ${onlyInLoaded.length}\n\n`);
+
+	if (onlyInTls.length > 0) {
+		await logCertificates(editor, `Certificates only in Node.js:`, onlyInTls.map(cert => cert.toString()));
+		await appendText(editor, '\n');
+	}
+
+	if (onlyInLoaded.length > 0) {
+		await logCertificates(editor, `Certificates only in @vscode/proxy-agent:`, onlyInLoaded.map(cert => cert.toString()));
+	}
 }
 
 async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string | { from: string[]; pem: string; cert: crypto.X509Certificate }>) {

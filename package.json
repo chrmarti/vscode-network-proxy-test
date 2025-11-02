@@ -3,7 +3,7 @@
 	"displayName": "Network Proxy Test",
 	"license": "MIT",
 	"publisher": "chrmarti",
-	"version": "0.0.18",
+	"version": "0.0.19",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/chrmarti/vscode-network-proxy-test.git"
@@ -42,6 +42,11 @@
 				"command": "network-proxy-test.show-builtin-certificates",
 				"category": "Network Proxy Test",
 				"title": "Show Built-In Certificates"
+			},
+			{
+				"command": "network-proxy-test.compare-system-certificates",
+				"category": "Network Proxy Test",
+				"title": "Compare System Certificates"
 			}
 		]
 	},
