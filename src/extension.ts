@@ -641,7 +641,11 @@ function isPast(date: string) {
 function publicKeyHash(current: crypto.X509Certificate | tls.DetailedPeerCertificate) {
 	let publicKey: Buffer;
 	if (current instanceof crypto.X509Certificate) {
-		publicKey = current.publicKey.export({ type: 'spki', format: 'der' });
+		try {
+			publicKey = current.publicKey.export({ type: 'spki', format: 'der' });
+		} catch (err) {
+			return err.message;
+		}
 	} else if (current.pubkey) {
 		publicKey = current.pubkey;
 	} else {
