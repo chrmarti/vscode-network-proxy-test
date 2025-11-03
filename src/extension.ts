@@ -80,30 +80,15 @@ async function compareSystemCertificates() {
 	await logHeaderInfo(editor);
 
 	// Get certificates from both sources
-	const tlsSystemCerts = tls.getCACertificates?.('system') || [];
-	const loadedSystemCerts = await loadSystemCertificates(false) || [];
+	const tlsSystemCerts = certsInfo(tls.getCACertificates?.('system') || []);
+	const loadedSystemCerts = certsInfo(await loadSystemCertificates(false) || []);
 
 	await appendText(editor, `Comparing system certificates loaded by:\n`);
-	await appendText(editor, `- Node.js: ${tlsSystemCerts.length} certificates\n`);
-	await appendText(editor, `- @vscode/proxy-agent: ${loadedSystemCerts.length} certificates\n\n`);
+	await appendText(editor, `- Node.js: ${tlsSystemCerts.lengths}\n`);
+	await appendText(editor, `- @vscode/proxy-agent: ${loadedSystemCerts.lengths}\n\n`);
 
-	// Parse all certificates and create maps
-	const tlsMap = new Map<string, crypto.X509Certificate>();
-	const loadedMap = new Map<string, crypto.X509Certificate>();
-
-	for (const pem of tlsSystemCerts) {
-		const cert = tryParseCertificate(pem);
-		if (cert instanceof crypto.X509Certificate) {
-			tlsMap.set(cert.fingerprint512, cert);
-		}
-	}
-
-	for (const pem of loadedSystemCerts) {
-		const cert = tryParseCertificate(pem);
-		if (cert instanceof crypto.X509Certificate) {
-			loadedMap.set(cert.fingerprint512, cert);
-		}
-	}
+	const tlsMap = tlsSystemCerts.unique;
+	const loadedMap = loadedSystemCerts.unique;
 
 	// Find certificates only in tls.getCACertificates
 	const onlyInTls: crypto.X509Certificate[] = [];
@@ -189,9 +174,9 @@ async function logRuntimeInfo(editor: vscode.TextEditor) {
 		await appendText(editor, `Remote: ${vscode.env.remoteName}\n`);
 	}
 	await appendText(editor, `\n`);
-	await appendText(editor, `Built-in certificates: ${tls.rootCertificates.length}\n`);
+	await appendText(editor, `Built-in certificates: ${certsInfo(tls.rootCertificates).lengths}\n`);
 	const osCerts = await loadSystemCertificates();
-	await appendText(editor, `OS certificates: ${osCerts ? osCerts.length : 'Failed to load'}\n`);
+	await appendText(editor, `OS certificates: ${osCerts ? certsInfo(osCerts).lengths : 'Failed to load'}\n`);
 	await appendText(editor, `\n`);
 }
 
@@ -320,8 +305,8 @@ async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, r
 				await appendText(editor, `  Fingerprint: ${current.fingerprint}\n`);
 
 				const toVerify = new crypto.X509Certificate(current.raw);
-				const toVerifyPublicKey = toVerify.publicKey.export({ type: 'spki', format: 'der' });
-				const localRoots = uniqCerts.filter(({ cert }) => cert.publicKey.export({ type: 'spki', format: 'der' }).equals(toVerifyPublicKey) || toVerify.checkIssued(cert));
+				const toVerifyPublicKey = tryGetPublicKey(toVerify);
+				const localRoots = uniqCerts.filter(({ cert }) => (toVerifyPublicKey && tryGetPublicKey(cert)?.equals(toVerifyPublicKey)) || toVerify.checkIssued(cert));
 				if (localRoots.length) {
 					const localRootsUnexpired = localRoots.filter(({ cert }) => !isPast(cert.validTo));
 					const allRootsExpired = !localRootsUnexpired.length;
@@ -452,7 +437,10 @@ async function getAllCaCertificates() {
 			const cert = tryParseCertificate(pem);
 			if (cert instanceof crypto.X509Certificate) {
 				if (certMap.has(cert.fingerprint512)) {
-					certMap.get(cert.fingerprint512)!.from.push('OS');
+					const from = certMap.get(cert.fingerprint512)!.from;
+					if (!from.includes('OS')) {
+						from.push('OS');
+					}
 				} else {
 					certMap.set(cert.fingerprint512, { from: ['OS'], pem, cert });
 				}
@@ -642,6 +630,14 @@ function isPast(date: string) {
 	return !isNaN(parsed) && parsed < Date.now();
 }
 
+function tryGetPublicKey(current: crypto.X509Certificate) {
+	try {
+		return current.publicKey.export({ type: 'spki', format: 'der' });
+	} catch (err) {
+		return undefined;
+	}
+}
+
 function publicKeyHash(current: crypto.X509Certificate | tls.DetailedPeerCertificate) {
 	let publicKey: Buffer;
 	if (current instanceof crypto.X509Certificate) {
@@ -657,4 +653,31 @@ function publicKeyHash(current: crypto.X509Certificate | tls.DetailedPeerCertifi
 	}
 	const publicKeyHash = crypto.createHash('sha256').update(publicKey).digest('hex');
 	return publicKeyHash.toUpperCase().replace(/(.{2})/g, '$1:').slice(0, -1);
+}
+
+function certsInfo(certs: readonly string[]) {
+	const unique = new Map<string, crypto.X509Certificate>();
+	const errors = [];
+	for (const pem of certs) {
+		const cert = tryParseCertificate(pem);
+		if (cert instanceof crypto.X509Certificate) {
+			unique.set(cert.fingerprint512, cert);
+		} else {
+			errors.push(cert);
+		}
+	}
+	const lengths = [`${certs.length} certs`];
+	const dups = certs.length - unique.size - errors.length;
+	if (dups) {
+		lengths.push(`${dups} duplicates`);
+	}
+	if (errors.length) {
+		lengths.push(`${errors.length} errors`);
+	}
+	return {
+		certs,
+		unique,
+		errors,
+		lengths: lengths.join(', '),
+	};
 }
