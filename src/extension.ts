@@ -81,7 +81,7 @@ async function compareSystemCertificates() {
 
 	// Get certificates from both sources
 	const tlsSystemCerts = tls.getCACertificates?.('system') || [];
-	const loadedSystemCerts = await loadSystemCertificates() || [];
+	const loadedSystemCerts = await loadSystemCertificates(false) || [];
 
 	await appendText(editor, `Comparing system certificates loaded by:\n`);
 	await appendText(editor, `- Node.js: ${tlsSystemCerts.length} certificates\n`);
@@ -513,6 +513,7 @@ const networkSettingsIds = [
 	'http.fetchAdditionalSupport',
 	'http.proxyKerberosServicePrincipal',
 	'http.systemCertificates',
+	'http.systemCertificatesNode',
 	'http.experimental.systemCertificatesV2',
 	'http.useLocalProxyConfiguration',
 ];
@@ -579,9 +580,12 @@ function loadVSCodeModule<T>(moduleName: string): T | undefined {
 	return undefined;
 }
 
-async function loadSystemCertificates(): Promise<string[] | undefined> {
+async function loadSystemCertificates(loadSystemCertificatesFromNode = vscode.workspace.getConfiguration('http').get<boolean>('systemCertificatesNode')): Promise<string[] | undefined> {
 	try {
-		const certificates = await proxyAgent?.loadSystemCertificates({ log: console });
+		const certificates = await proxyAgent?.loadSystemCertificates({
+			loadSystemCertificatesFromNode: () => loadSystemCertificatesFromNode,
+			log: console
+		});
 		return Array.isArray(certificates) ? certificates : undefined;
 	} catch (err) {
 		console.error(err);

@@ -94,6 +94,7 @@ export declare function createFetchPatch(params: ProxyAgentParams, originalFetch
 export declare function patchUndici(originalUndici: typeof undici): void;
 export declare function getOrLoadAdditionalCertificates(params: ProxyAgentParams): Promise<string[]>;
 export interface CertificateParams {
+    loadSystemCertificatesFromNode: () => boolean | undefined;
     log: Log;
 }
 export declare function loadSystemCertificates(params: CertificateParams): Promise<string[]>;
