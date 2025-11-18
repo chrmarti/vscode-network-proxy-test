@@ -43,6 +43,7 @@ async function testConnection(useHTTP2: boolean) {
 
 	const editor = await openEmptyEditor();
 	await logHeaderInfo(editor);
+	await logCertificatesSummary(editor);
 	await logSettings(editor);
 	await logEnvVariables(editor);
 	await lookupHosts(editor, url);
@@ -53,7 +54,11 @@ async function showOSCertificates() {
 	const editor = await openEmptyEditor();
 	await logHeaderInfo(editor);
 	const certs = await loadSystemCertificates();
-	await logCertificates(editor, `Certificates loaded from the OS (${osCertificateLocation()}):`, certs!);
+	if (Array.isArray(certs)) {
+		await logCertificates(editor, `Certificates loaded from the OS (${osCertificateLocation()}):`, certs);
+	} else {
+		await appendText(editor, `Error loading OS certificates: ${collectErrorMessages(certs.error)}\n`);
+	}
 }
 
 function osCertificateLocation() {
@@ -79,13 +84,31 @@ async function compareSystemCertificates() {
 	const editor = await openEmptyEditor();
 	await logHeaderInfo(editor);
 
-	// Get certificates from both sources
-	const tlsSystemCerts = certsInfo(tls.getCACertificates?.('system') || []);
-	const loadedSystemCerts = certsInfo(await loadSystemCertificates(false) || []);
-
 	await appendText(editor, `Comparing system certificates loaded by:\n`);
-	await appendText(editor, `- Node.js: ${tlsSystemCerts.lengths}\n`);
-	await appendText(editor, `- @vscode/proxy-agent: ${loadedSystemCerts.lengths}\n\n`);
+
+	const tlsCerts = loadSystemCertificatesNode();
+	let tlsSystemCerts;
+	if (Array.isArray(tlsCerts)) {
+		tlsSystemCerts = certsInfo(tlsCerts);
+		await appendText(editor, `- Node.js: ${tlsSystemCerts.lengths}\n`);
+	} else if (!tlsCerts) {
+		await appendText(editor, `- Node.js: tls.getCACertificates() not available in this Node.js version (${process.version})\n`);
+	} else {
+		await appendText(editor, `- Node.js: Error loading OS certificates: ${collectErrorMessages(tlsCerts.error)}\n`);
+	}
+
+	const loadedCerts = await loadSystemCertificates(false);
+	let loadedSystemCerts;
+	if (Array.isArray(loadedCerts)) {
+		loadedSystemCerts = certsInfo(loadedCerts);
+		await appendText(editor, `- @vscode/proxy-agent: ${loadedSystemCerts.lengths}\n\n`);
+	} else {
+		await appendText(editor, `- @vscode/proxy-agent: Error loading OS certificates: ${collectErrorMessages(loadedCerts.error)}\n`);
+	}
+
+	if (!tlsSystemCerts || !loadedSystemCerts) {
+		return;
+	}
 
 	const tlsMap = tlsSystemCerts.unique;
 	const loadedMap = loadedSystemCerts.unique;
@@ -126,10 +149,10 @@ async function compareSystemCertificates() {
 async function logCertificates(editor: vscode.TextEditor, title: string, certs: ReadonlyArray<string | { from: string[]; pem: string; cert: crypto.X509Certificate }>) {
 	await appendText(editor, `${title}\n`);
 	for (const cert of certs) {
-		const current = typeof cert === 'string' ? tryParseCertificate(cert) : cert instanceof crypto.X509Certificate ? cert : cert.cert;
+		const current = typeof cert === 'string' ? tryParseCertificate(cert) : cert.cert;
 		if (!(current instanceof crypto.X509Certificate)) {
-			await appendText(editor, `- Certificate parse error: ${(current as any)?.message || String(current)}\n`);
-			await appendText(editor, `  Input:\n${cert}\n`);
+			await appendText(editor, `- Certificate parse error: ${current.error?.message || String(current.error)}\n`);
+			await appendText(editor, `  Input: ${(typeof cert === 'string' ? cert : cert.pem).trim()}\n`);
 			continue;
 		}
 		// await appendText(editor, `- Raw:\n${typeof cert === 'string' ? cert : cert.pem}\n`);
@@ -174,9 +197,12 @@ async function logRuntimeInfo(editor: vscode.TextEditor) {
 		await appendText(editor, `Remote: ${vscode.env.remoteName}\n`);
 	}
 	await appendText(editor, `\n`);
+}
+
+async function logCertificatesSummary(editor: vscode.TextEditor) {
 	await appendText(editor, `Built-in certificates: ${certsInfo(tls.rootCertificates).lengths}\n`);
 	const osCerts = await loadSystemCertificates();
-	await appendText(editor, `OS certificates: ${osCerts ? certsInfo(osCerts).lengths : 'Failed to load'}\n`);
+	await appendText(editor, `OS certificates: ${Array.isArray(osCerts) ? certsInfo(osCerts).lengths : `Error: ${collectErrorMessages(osCerts.error)}`}\n`);
 	await appendText(editor, `\n`);
 }
 
@@ -232,14 +258,11 @@ async function probeProxy(editor: vscode.TextEditor, url: string) {
 	if (proxyAgent?.loadSystemCertificates && probeProxyURL?.startsWith('https:')) {
 		const tlsOrig: typeof tls | undefined = (tls as any).__vscodeOriginal;
 		if (tlsOrig) {
-			await appendText(editor, `- TLS: `);
 			const osCertificates = await loadSystemCertificates();
-			if (!osCertificates) {
-				await appendText(editor, `(failed to load system certificates) `);
-			}
+			await appendText(editor, `- TLS${!Array.isArray(osCertificates) ? ` (errors loading certificates)` : ''}: `);
 			const start = Date.now();
 			try {
-				const result = await Promise.race([tlsConnect(tlsOrig, probeProxyURL, [...tls.rootCertificates, ...(osCertificates || [])]), timeout(timeoutSeconds * 1000)]);
+				const result = await Promise.race([tlsConnect(tlsOrig, probeProxyURL, [...tls.rootCertificates, ...(Array.isArray(osCertificates) ? osCertificates : [])]), timeout(timeoutSeconds * 1000)]);
 				if (result !== 'timeout') {
 					await appendText(editor, `${result} (${Date.now() - start} ms)\n`);
 				} else {
@@ -286,8 +309,8 @@ async function probeUrlWithNodeModules(editor: vscode.TextEditor, url: string, r
 			await appendText(editor, `- Proxy-Authenticate: ${res.headers['proxy-authenticate']}\n`);
 		}
 		if (cert) {
-			const uniqCerts = await getAllCaCertificates();
-			await appendText(editor, `Certificate chain:\n`);
+			const { uniqCerts, errors } = await getAllCaCertificates();
+			await appendText(editor, `Certificate chain${errors.length ? ` (errors loading OS certificates: ${errors.length})` : ''}:\n`);
 			let hasExpired = false;
 			let current = cert;
 			const allLocalRoots: typeof uniqCerts = [];
@@ -425,14 +448,17 @@ function getNodeFetchWithH2(): typeof globalThis.fetch {
 
 async function getAllCaCertificates() {
 	const osCerts = await loadSystemCertificates();
+	const errors: any[] = [];
 	const certMap = new Map<string, { from: string[]; pem: string; cert: crypto.X509Certificate; }>();
 	for (const pem of tls.rootCertificates) {
 		const cert = tryParseCertificate(pem);
 		if (cert instanceof crypto.X509Certificate) {
 			certMap.set(cert.fingerprint512, { from: ['built-in'], pem, cert });
+		} else {
+			errors.push(cert.error);
 		}
 	}
-	if (osCerts) {
+	if (Array.isArray(osCerts)) {
 		for (const pem of osCerts) {
 			const cert = tryParseCertificate(pem);
 			if (cert instanceof crypto.X509Certificate) {
@@ -444,17 +470,24 @@ async function getAllCaCertificates() {
 				} else {
 					certMap.set(cert.fingerprint512, { from: ['OS'], pem, cert });
 				}
+			} else {
+				errors.push(cert.error);
 			}
 		}
+	} else {
+		errors.push(osCerts.error);
 	}
-	return [...certMap.values()];
+	return {
+		uniqCerts: [...certMap.values()],
+		errors,
+	};
 }
 
 function tryParseCertificate(pem: string) {
 	try {
 		return new crypto.X509Certificate(pem);
-	} catch (err) {
-		return err;
+	} catch (error) {
+		return { error };
 	}
 }
 
@@ -568,16 +601,23 @@ function loadVSCodeModule<T>(moduleName: string): T | undefined {
 	return undefined;
 }
 
-async function loadSystemCertificates(loadSystemCertificatesFromNode = vscode.workspace.getConfiguration('http').get<boolean>('systemCertificatesNode')): Promise<string[] | undefined> {
+function loadSystemCertificatesNode(): string[] | { error: any } | undefined {
+	try {
+		return tls.getCACertificates?.('system');
+	} catch (error) {
+		return { error };
+	}
+}
+
+async function loadSystemCertificates(loadSystemCertificatesFromNode = vscode.workspace.getConfiguration('http').get<boolean>('systemCertificatesNode')): Promise<string[] | { error: any }> {
 	try {
 		const certificates = await proxyAgent?.loadSystemCertificates({
 			loadSystemCertificatesFromNode: () => loadSystemCertificatesFromNode,
 			log: console
 		});
-		return Array.isArray(certificates) ? certificates : undefined;
-	} catch (err) {
-		console.error(err);
-		return undefined;
+		return Array.isArray(certificates) ? certificates : { error: 'Was undefined' };
+	} catch (error) {
+		return { error };
 	}
 }
 
@@ -644,7 +684,7 @@ function publicKeyHash(current: crypto.X509Certificate | tls.DetailedPeerCertifi
 		try {
 			publicKey = current.publicKey.export({ type: 'spki', format: 'der' });
 		} catch (err) {
-			return err.message;
+			return err.message as string || 'Error exporting public key';
 		}
 	} else if (current.pubkey) {
 		publicKey = current.pubkey;
@@ -663,7 +703,7 @@ function certsInfo(certs: readonly string[]) {
 		if (cert instanceof crypto.X509Certificate) {
 			unique.set(cert.fingerprint512, cert);
 		} else {
-			errors.push(cert);
+			errors.push(cert.error);
 		}
 	}
 	const lengths = [`${certs.length} certs`];
