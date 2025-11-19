@@ -538,6 +538,9 @@ const networkSettingsIds = [
 	'http.experimental.systemCertificatesV2',
 	'http.useLocalProxyConfiguration',
 ];
+const alwaysShowSettingsIds = [
+	'http.systemCertificatesNode',
+];
 
 async function logSettings(editor: vscode.TextEditor) {
 	const conf = vscode.workspace.getConfiguration();
@@ -546,7 +549,7 @@ async function logSettings(editor: vscode.TextEditor) {
 		const keys = Object.keys(obj || {})
 			.filter(key => key !== 'key' && key !== 'defaultValue' && (obj as any)[key] !== undefined);
 		return { id, obj, keys };
-	}).filter(({ keys }) => keys.length);
+	}).filter(({ id, keys }) => alwaysShowSettingsIds.includes(id) || keys.length);
 	if (settings.length) {
 		await appendText(editor, 'Settings:\n');
 		for (const { id, obj, keys } of settings) {
